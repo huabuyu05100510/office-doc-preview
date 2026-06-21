@@ -5,6 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.mjs",
-    "start": "node src/index.mjs"
+    "start": "node src/index.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@hyzyla/pdfium": "^2.1.13",
+    "jsonwebtoken": "^9.0.3"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
   }
 }

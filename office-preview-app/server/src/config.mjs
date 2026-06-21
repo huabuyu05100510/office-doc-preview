@@ -23,7 +23,31 @@ export const CONFIG = {
   // 转码并发
   CONVERT_CONCURRENCY: 2,
   // 单次转码超时（10 分钟，覆盖超大文件）
-  CONVERT_TIMEOUT_MS: 10 * 60 * 1000
+  CONVERT_TIMEOUT_MS: 10 * 60 * 1000,
+  // ============ OnlyOffice Document Server ============
+  ONLYOFFICE_HOST: process.env.ONLYOFFICE_HOST || 'http://localhost:8080',
+  ONLYOFFICE_JWT_SECRET: process.env.ONLYOFFICE_JWT_SECRET || 'mvtndSBp0a7fa400u81Cq2MSfddXD090',
+  HOST_FOR_DOCKER: process.env.HOST_FOR_DOCKER || 'http://host.docker.internal:5180',
+  // ============ PDF 栅格化（pdftoppm / pdfinfo / poppler） ============
+  // 注：自 v3 起，PNG 渲染 + 文字坐标改用 PDFium C++（@hyzyla/pdfium WASM）
+  //   - 同引擎同时出 PNG + 字符 bbox → 100% 像素对齐（消除 pdftoppm+pdftotext 跨引擎漂移）
+  //   - PDFTOPPM/PDFINFO 保留为 fallback（@hyzyla/pdfium init 失败时使用）
+  PDFTOPPM: process.env.PDFTOPPM || '/opt/homebrew/bin/pdftoppm',
+  PDFINFO: process.env.PDFINFO || '/opt/homebrew/bin/pdfinfo',
+  RASTERIZE_THUMB_DPI: Number(process.env.RASTERIZE_THUMB_DPI || 96),
+  RASTERIZE_PAGE_DPI: Number(process.env.RASTERIZE_PAGE_DPI || 120),
+  RASTERIZE_PAGE_PARALLEL: Number(process.env.RASTERIZE_PAGE_PARALLEL || 2),
+  RASTERIZE_TIMEOUT_MS: Number(process.env.RASTERIZE_TIMEOUT_MS || 5 * 60 * 1000),
+  RASTERIZE_MAX_PAGES: Number(process.env.RASTERIZE_MAX_PAGES || 200),
+  // ============ PDFium 引擎配置 ============
+  // 单进程 LRU 缓存 N 个文档句柄；空闲 idleMs 后自动 evict 释放 WASM 内存
+  PDFIUM_CACHE_MAX_DOCS: Number(process.env.PDFIUM_CACHE_MAX_DOCS || 5),
+  PDFIUM_CACHE_IDLE_MS: Number(process.env.PDFIUM_CACHE_IDLE_MS || 30000)
+}
+
+// 生产模式强制要求显式 JWT 密钥
+if (process.env.NODE_ENV === 'production' && !process.env.ONLYOFFICE_JWT_SECRET) {
+  throw new Error('[config] ONLYOFFICE_JWT_SECRET required in production')
 }
 
 export const MIME = {

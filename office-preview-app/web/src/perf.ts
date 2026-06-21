@@ -21,13 +21,26 @@ export interface PerfMetrics {
   fps: number
   scrollVel: number     // px/s
   memMb: number         // performance.memory usedJSHeapSize (Chrome)
+  // 预测渲染引擎
+  predictiveLevel: 'idle' | 'warming' | 'prefetch' | 'cooldown' | string
+  predictiveBuffer: number
   // 转码（来自 task）
   convertMs: number
   convertRetries: number
   convertEtaSec: number
   convertElapsedSec: number
+  rasterizeMs: number   // 栅格化耗时（来自 task.convertRasterizeMs）
   previewSize: number
   ratio: number         // preview/original
+  // 选区对齐可观测（图片+文字层模式）：text-layer span 与 PNG 实际 ink 位置误差
+  alignErrorAvg: number  // 平均误差（px）
+  alignErrorMax: number  // 最大误差（px）
+  alignSamples: number   // 采样 span 数
+  // PDFium 引擎可观测（服务端 X-Render-Engine / X-Render-Ms / X-Char-Count 响应头）
+  renderEngine: 'pdfium-wasm' | 'fallback-poppler' | 'unknown'
+  pdfiumRenderMs: number    // 最近一页渲染耗时（来自 X-Render-Ms）
+  pdfiumTotalMs: number     // 累计渲染耗时
+  pdfiumCharsTotal: number  // 累计字符数
 }
 
 interface PerfStore extends PerfMetrics {
@@ -39,8 +52,13 @@ const EMPTY: PerfMetrics = {
   tParseMs: 0, tFirstPageMs: 0, tLoadStart: 0,
   renderedPages: 0, lastRenderMs: 0, poolHits: 0, poolMisses: 0,
   fps: 0, scrollVel: 0, memMb: 0,
+  predictiveLevel: 'idle', predictiveBuffer: 2,
   convertMs: 0, convertRetries: 0, convertEtaSec: 0, convertElapsedSec: 0,
-  previewSize: 0, ratio: 0
+  rasterizeMs: 0,
+  previewSize: 0, ratio: 0,
+  alignErrorAvg: 0, alignErrorMax: 0, alignSamples: 0,
+  renderEngine: 'unknown',
+  pdfiumRenderMs: 0, pdfiumTotalMs: 0, pdfiumCharsTotal: 0
 }
 
 export const usePerf = create<PerfStore>((set) => ({
