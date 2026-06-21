@@ -3,10 +3,17 @@ import { useStore } from './store'
 import { UploadDrop } from './components/UploadDrop'
 import { TaskCard } from './components/TaskCard'
 import { PreviewModal } from './components/PreviewModal'
+import { CompareView } from './compare/CompareView'
+import { CompareTargetPicker } from './compare/CompareTargetPicker'
 import type { Task } from './types'
 
 export default function App() {
-  const { tasks, loading, selected, fetchTasks, select, refreshIfNeeded } = useStore()
+  const {
+    tasks, loading, selected,
+    compareSrc, compareTgt,
+    fetchTasks, select, refreshIfNeeded,
+    startCompare, pickCompareTarget, closeCompare
+  } = useStore()
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState<'all' | 'office' | 'media' | 'text'>('all')
 
@@ -89,7 +96,7 @@ export default function App() {
         ) : (
           <div className="grid">
             {filtered.map(t => (
-              <TaskCard key={t.id} task={t} onPreview={select} />
+              <TaskCard key={t.id} task={t} onPreview={select} onCompare={startCompare} />
             ))}
           </div>
         )}
@@ -97,6 +104,19 @@ export default function App() {
 
       {selected && (
         <PreviewModal task={selected} onClose={() => select(null)} onDownload={download} />
+      )}
+
+      {compareSrc && !compareTgt && (
+        <CompareTargetPicker
+          src={compareSrc}
+          candidates={tasks}
+          onPick={pickCompareTarget}
+          onCancel={closeCompare}
+        />
+      )}
+
+      {compareSrc && compareTgt && (
+        <CompareView src={compareSrc} tgt={compareTgt} onClose={closeCompare} />
       )}
     </div>
   )

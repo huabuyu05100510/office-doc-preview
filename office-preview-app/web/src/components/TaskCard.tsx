@@ -5,6 +5,7 @@ import { humanSize, formatTime, fileIcon, previewKindOf } from '../types'
 interface Props {
   task: Task
   onPreview: (t: Task) => void
+  onCompare: (t: Task) => void
 }
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
@@ -15,11 +16,13 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   failed: { label: '转码失败', cls: 'fail' }
 }
 
-function TaskCardBase({ task, onPreview }: Props) {
+function TaskCardBase({ task, onPreview, onCompare }: Props) {
   const kind = previewKindOf(task)
   const st = STATUS_META[task.convertStatus] || STATUS_META.done
   const previewable = st.label === '可预览' || task.strategy === 'frontend'
   const icon = fileIcon(task.ext)
+  // 仅文档类（docx/pdf）支持对比
+  const comparable = previewable && ['docx', 'pdf'].includes((task.previewExt || task.ext).toLowerCase())
 
   return (
     <div className={`card ${previewable ? '' : 'card-busy'}`}>
@@ -44,6 +47,16 @@ function TaskCardBase({ task, onPreview }: Props) {
         >
           预览
         </button>
+        {comparable && (
+          <button
+            className="btn-mini"
+            disabled={!previewable}
+            onClick={() => onCompare(task)}
+            title="与另一份译文对照预览"
+          >
+            对比
+          </button>
+        )}
       </div>
     </div>
   )

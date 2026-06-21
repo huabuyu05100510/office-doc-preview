@@ -374,3 +374,62 @@ a { color: inherit; text-decoration: none; }
   background: rgba(47, 107, 255, 0.3);
   color: transparent;
 }
+
+/* ============ 翻译对比 + 标注 + 协作 ============ */
+/* 模型：claude-sonnet-4-6 */
+
+.compare-mask { z-index: 1001; }
+.compare-modal { width: 96vw; height: 92vh; max-width: none; }
+.compare-body { display: flex; gap: 1px; height: calc(100% - 56px); background: var(--border, #1e2330); overflow: hidden; }
+.compare-pane { flex: 1; overflow: auto; position: relative; background: var(--bg, #0f1320); padding: 12px; }
+.compare-pane-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-2, #1a1f2e); border-radius: 8px; margin-bottom: 10px; position: sticky; top: 0; z-index: 5; }
+.compare-pane-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-side { font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+.chip-src { background: rgba(255, 85, 85, 0.2); color: #ff8888; }
+.chip-tgt { background: rgba(0, 200, 120, 0.2); color: #66e6a3; }
+
+/* 段高亮 */
+[data-seg-id] { transition: background-color 0.15s, outline 0.15s; border-radius: 2px; }
+[data-seg-id]:hover { background: rgba(255, 215, 0, 0.08); }
+.seg-active { background: rgba(255, 215, 0, 0.22) !important; outline: 1px solid rgba(255, 215, 0, 0.5); }
+.seg-partner { background: rgba(91, 136, 255, 0.18) !important; outline: 1px solid rgba(91, 136, 255, 0.5); }
+
+/* 目标选择器 */
+.compare-picker { width: 640px; max-width: 92vw; height: 70vh; }
+.picker-body { padding: 16px; height: calc(100% - 56px); overflow: auto; }
+.picker-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.picker-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-2, #1a1f2e); border: 1px solid transparent; border-radius: 8px; cursor: pointer; color: inherit; }
+.picker-item:hover { border-color: var(--accent, #2b6cff); background: var(--bg-3, #232838); }
+.picker-name { flex: 1; text-align: left; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-cta { color: var(--accent, #2b6cff); font-size: 12px; }
+
+/* 标注层 */
+.annotation-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.ann-marker { position: absolute; border: 2px solid; border-radius: 3px; pointer-events: auto; cursor: pointer; }
+.ann-marker.open { border-color: #ff6b6b; background: rgba(255, 107, 107, 0.1); }
+.ann-marker.resolved { border-color: #66e6a3; background: rgba(102, 230, 163, 0.1); }
+.ann-bubble { position: absolute; transform: translate(-50%, -100%); background: var(--bg-3, #232838); border: 1px solid var(--border, #1e2330); padding: 6px 10px; border-radius: 6px; font-size: 12px; max-width: 240px; pointer-events: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+.ann-bubble .ann-author { font-size: 11px; color: var(--muted, #888); margin-bottom: 2px; }
+
+/* 标注列表 */
+.ann-list { position: absolute; right: 0; top: 0; width: 280px; height: 100%; background: var(--bg-2, #1a1f2e); border-left: 1px solid var(--border, #1e2330); overflow: auto; padding: 10px; z-index: 6; }
+.ann-list-item { padding: 8px 10px; background: var(--bg, #0f1320); border-radius: 6px; margin-bottom: 6px; cursor: pointer; font-size: 12px; }
+.ann-list-item:hover { background: var(--bg-3, #232838); }
+.ann-list-item.resolved { opacity: 0.6; }
+
+/* 协作：远端光标 */
+.collab-cursor { position: absolute; width: 2px; pointer-events: none; z-index: 5; }
+.collab-cursor-label { position: absolute; top: -16px; left: 0; font-size: 10px; padding: 1px 4px; border-radius: 3px; color: #fff; white-space: nowrap; }
+.presence-bar { display: flex; gap: 4px; align-items: center; padding: 0 6px; }
+.presence-avatar { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; border: 2px solid var(--bg, #0f1320); }
+
+/* QA 列表 */
+.qa-list { position: absolute; right: 0; top: 0; width: 320px; height: 100%; background: var(--bg-2, #1a1f2e); border-left: 1px solid var(--border, #1e2330); overflow: auto; padding: 10px; z-index: 6; }
+.qa-item { padding: 8px 10px; background: var(--bg, #0f1320); border-radius: 6px; margin-bottom: 6px; font-size: 12px; border-left: 3px solid; }
+.qa-item.error { border-left-color: #ff5c5c; }
+.qa-item.warning { border-left-color: #ffb84d; }
+.qa-item.info { border-left-color: #5b88ff; }
+.qa-rule { font-weight: 600; }
+.qa-msg { color: var(--muted, #888); margin: 2px 0; }
+.qa-suggestion { color: var(--accent, #2b6cff); }
+.qa-actions { margin-top: 6px; display: flex; gap: 6px; }

@@ -9,12 +9,19 @@ interface State {
   uploadPct: number      // 当前上传进度 0..1
   uploadName: string | null
   selected: Task | null
+  // 对比模式：src 设置后弹出 target 选择器；tgt 设置后进入 CompareView
+  compareSrc: Task | null
+  compareTgt: Task | null
   // 拉取一次任务列表
   fetchTasks: () => Promise<void>
   // 上传单/多文件（XHR 上传进度）
   upload: (files: File[]) => Promise<void>
   // 选中预览
   select: (t: Task | null) => void
+  // 对比
+  startCompare: (t: Task) => void       // 设置 src，弹出 target 选择器
+  pickCompareTarget: (t: Task) => void  // 设置 tgt，进入 CompareView
+  closeCompare: () => void              // 关闭（清掉两者）
   // 轮询：当存在 pending/processing 任务时高频刷新
   refreshIfNeeded: () => Promise<void>
 }
@@ -26,6 +33,8 @@ export const useStore = create<State>((set, get) => ({
   uploadPct: 0,
   uploadName: null,
   selected: null,
+  compareSrc: null,
+  compareTgt: null,
 
   async fetchTasks() {
     set({ loading: true })
@@ -71,6 +80,20 @@ export const useStore = create<State>((set, get) => ({
 
   select(t) {
     set({ selected: t })
+  },
+
+  startCompare(t) {
+    set({ compareSrc: t, compareTgt: null })
+  },
+
+  pickCompareTarget(t) {
+    const src = get().compareSrc
+    if (!src || src.id === t.id) return  // 不能与自己对比
+    set({ compareTgt: t })
+  },
+
+  closeCompare() {
+    set({ compareSrc: null, compareTgt: null })
   },
 
   async refreshIfNeeded() {

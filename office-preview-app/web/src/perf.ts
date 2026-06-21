@@ -41,6 +41,19 @@ export interface PerfMetrics {
   pdfiumRenderMs: number    // 最近一页渲染耗时（来自 X-Render-Ms）
   pdfiumTotalMs: number     // 累计渲染耗时
   pdfiumCharsTotal: number  // 累计字符数
+  // ============ 翻译对比 / 标注 / 协作可观测 ============
+  alignPairs: number          // 对齐命中段对数
+  alignScoreAvg: number       // 平均对齐置信度
+  alignGranularity: string    // 'para' | 'char'
+  alignLatencyMs: number      // /api/align 往返耗时
+  alignAlgorithm: string      // 'mock-v1' | ...
+  qaIssues: number            // 质检命中数
+  qaByRule: Record<string, number>  // 按规则计数
+  annotationsTotal: number   // 标注总数
+  annotationsOpen: number     // 待处理标注数
+  collabOnline: number        // 在线人数
+  collabRooms: number         // 协作房间数
+  wsLatencyMs: number         // ws ping 往返
 }
 
 interface PerfStore extends PerfMetrics {
@@ -58,7 +71,11 @@ const EMPTY: PerfMetrics = {
   previewSize: 0, ratio: 0,
   alignErrorAvg: 0, alignErrorMax: 0, alignSamples: 0,
   renderEngine: 'unknown',
-  pdfiumRenderMs: 0, pdfiumTotalMs: 0, pdfiumCharsTotal: 0
+  pdfiumRenderMs: 0, pdfiumTotalMs: 0, pdfiumCharsTotal: 0,
+  alignPairs: 0, alignScoreAvg: 0, alignGranularity: 'para', alignLatencyMs: 0, alignAlgorithm: '',
+  qaIssues: 0, qaByRule: {},
+  annotationsTotal: 0, annotationsOpen: 0,
+  collabOnline: 0, collabRooms: 0, wsLatencyMs: 0
 }
 
 export const usePerf = create<PerfStore>((set) => ({

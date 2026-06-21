@@ -9,6 +9,14 @@ import { enqueueConvert } from './converter.mjs'
 import { ensureLinearized } from './pdf-optimize.mjs'
 import { extractTextLayer, pdfRenderEngine } from './pdf-rasterize.mjs'
 import { getPdfiumMetrics } from './pdfium-render.mjs'
+import { createAlignment, getAlignment, alignStats } from './align.mjs'
+import { runQA, buildFixSuggestion } from './qa.mjs'
+import {
+  createAnnotation, listAnnotations, getAnnotation,
+  updateAnnotation, deleteAnnotation, annotationStats
+} from './annotations.mjs'
+import { issueAnonymous, verifyToken } from './auth.mjs'
+import { collabStats } from './collab.mjs'
 
 function sendJSON(res, code, data) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -224,6 +232,111 @@ async function handleRoute(req, res, url, pathname) {
   // 当前渲染引擎标识（被前端 perf 面板消费）
   if (pathname === '/api/render-engine') {
     return sendJSON(res, 200, { engine: pdfRenderEngine() })
+  }
+
+  // ============ 翻译对比 / 标注 / 协作 ============
+
+  // 匿名身份签发（前端首次进入协作模式时调用）
+  if (pathname === '/api/auth/anonymous' && req.method === 'POST') {
+    return sendJSON(res, 200, issueAnonymous())
+  }
+
+  // 对齐：创建
+  if (pathname === '/api/align' && req.method === 'POST') {
+    const body = await readBody(req, 1 << 20)
+    const input = JSON.parse(body.toString('utf-8') || '{}')
+    if (!input.srcTaskId || !input.tgtTaskId) {
+      return sendJSON(res, 400, { error: 'srcTaskId/tgtTaskId required' })
+    }
+    if (!Array.isArray(input.srcSegs) || !Array.isArray(input.tgtSegs)) {
+      return sendJSON(res, 400, { error: 'srcSegs/tgtSegs must be arrays' })
+    }
+    const record = createAlignment(input)
+    return sendJSON(res, 200, record)
+  }
+
+  // 对齐：按 id 重取
+  const alignMatch = pathname.match(/^\/api\/align\/([\w-]+)$/)
+  if (alignMatch && req.method === 'GET') {
+    const r = getAlignment(alignMatch[1])
+    if (!r) return sendJSON(res, 404, { error: 'alignment not found' })
+    return sendJSON(res, 200, r)
+  }
+
+  // 对齐健康
+  if (pathname === '/api/health/align') {
+    return sendJSON(res, 200, alignStats())
+  }
+
+  // QA：取检测结果
+  const qaMatch = pathname.match(/^\/api\/qa\/([\w-]+)$/)
+  if (qaMatch && req.method === 'GET') {
+    const taskId = qaMatch[1]
+    const against = url.searchParams.get('against')
+    const alignmentId = url.searchParams.get('alignmentId')
+    const alignment = alignmentId ? getAlignment(alignmentId) : null
+    if (!alignment) {
+      return sendJSON(res, 404, { error: 'alignment not found; pass ?alignmentId=' })
+    }
+    const tgtTask = getTask(taskId)
+    const srcTask = against ? getTask(against) : null
+    const result = runQA(tgtTask || { id: taskId }, srcTask || (against ? { id: against } : null), alignment)
+    return sendJSON(res, 200, result)
+  }
+
+  // QA：纠错建议
+  const qaFixMatch = pathname.match(/^\/api\/qa\/([\w-]+)\/fix$/)
+  if (qaFixMatch && req.method === 'POST') {
+    const body = await readBody(req, 1 << 20)
+    const input = JSON.parse(body.toString('utf-8') || '{}')
+    // 不依赖 DB：前端传 issue 整对象即可（v1）
+    const fix = buildFixSuggestion(input.issue || input)
+    return sendJSON(res, 200, fix)
+  }
+
+  // QA 健康
+  if (pathname === '/api/health/qa') {
+    return sendJSON(res, 200, { algorithm: 'mock-v1' })
+  }
+
+  // 标注 CRUD
+  const annListMatch = pathname.match(/^\/api\/annotations\/([\w-]+)$/)
+  if (annListMatch && req.method === 'GET') {
+    return sendJSON(res, 200, { annotations: listAnnotations(annListMatch[1]), stats: annotationStats(annListMatch[1]) })
+  }
+  if (annListMatch && req.method === 'POST') {
+    const body = await readBody(req, 1 << 20)
+    const input = JSON.parse(body.toString('utf-8') || '{}')
+    if (!input.anchor || !input.body) {
+      return sendJSON(res, 400, { error: 'anchor/body required' })
+    }
+    const ann = createAnnotation(annListMatch[1], input)
+    return sendJSON(res, 200, ann)
+  }
+
+  const annItemMatch = pathname.match(/^\/api\/annotations\/([\w-]+)\/([\w-]+)$/)
+  if (annItemMatch) {
+    const taskId = annItemMatch[1]
+    const annId = annItemMatch[2]
+    if (req.method === 'GET') {
+      const a = getAnnotation(taskId, annId)
+      return a ? sendJSON(res, 200, a) : sendJSON(res, 404, { error: 'annotation not found' })
+    }
+    if (req.method === 'PATCH') {
+      const body = await readBody(req, 1 << 20)
+      const patch = JSON.parse(body.toString('utf-8') || '{}')
+      const a = updateAnnotation(taskId, annId, patch)
+      return a ? sendJSON(res, 200, a) : sendJSON(res, 404, { error: 'annotation not found' })
+    }
+    if (req.method === 'DELETE') {
+      const ok = deleteAnnotation(taskId, annId)
+      return sendJSON(res, ok ? 200 : 404, { ok })
+    }
+  }
+
+  // 协作健康
+  if (pathname === '/api/health/collab') {
+    return sendJSON(res, 200, collabStats())
   }
 
   // 扫描样本（开发期手动触发）

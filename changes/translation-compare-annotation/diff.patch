@@ -1,0 +1,3661 @@
+diff --git a/changes/translation-compare-annotation/README.md b/changes/translation-compare-annotation/README.md
+new file mode 100644
+index 0000000..10c4ca9
+--- /dev/null
++++ b/changes/translation-compare-annotation/README.md
+@@ -0,0 +1,53 @@
++# 翻译对比预览 · 质量检查 · 多人协同标注
++
++> **模型**：Claude Sonnet 4.6（claude-sonnet-4-6）
++> **日期**：2026-06-21
++> **分支**：`feature/translation-compare-annotation`（基于 `feature/pdfium-unified-renderer`）
++> **策略**：先 mock，端到端跑通；真实算法留 v2 增量
++
++## 范围
++
++1. **翻译前后对比预览**：左右双栏，段落级对应，hover/click 互高亮 + 滚动联动
++2. **质量检查与纠错 + 标注**：mock 7 类 issue 建议；人工批注 CRUD（真实落盘）
++3. **多人同时标注预览**：真实 WebSocket，标注/cursor/scroll/presence 实时同步
++
++## Mock 边界
++
++| 服务 | v1 | v2 |
++|---|---|---|
++| `/api/align` | 段索引 1:1 配对，score=0.92 | Gale-Church DP + simhash |
++| `/api/qa/:taskId` | 硬编码 5-7 条 issue 样本 | 7 条规则真实跑 |
++| `/api/annotations/*` | **真实 CRUD**（落盘 JSON） | 同 v1 |
++| `ws /collab` | **真实 WebSocket + 广播** | 加重连 / 心跳 / 退避 |
++
++## 新增模块
++
++### 后端 `office-preview-app/server/src/`
++- `align.mjs` — 段提取 + mock 配对 + 落盘缓存
++- `qa.mjs` — runQA mock
++- `annotations.mjs` — Annotation CRUD + 落盘
++- `collab.mjs` — WebSocket hub + 房间路由
++- `auth.mjs` — 匿名 JWT 签发
++
++### 前端 `office-preview-app/web/src/`
++- `compare/` — CompareView + useAlignSync + SegmentHighlighter
++- `annotations/` — AnnotationLayer + AnnotationList + useAnnotationPicker
++- `collab/` — useCollab + CursorsLayer + PresenceBar
++
++### 测试
++- vitest：align / qa / annotations / collab / useAlignSync / AnnotationLayer / useCollab
++- Playwright：compare-highlight / qa-suggestions / annotation-flow / multiplayer + 截图回归
++
++## 可观测
++
++- 后端日志前缀：`[align]` / `[qa]` / `[annotate]` / `[collab]`
++- `usePerf` 扩展：alignPairs / alignScoreAvg / qaIssues / annotationsTotal / collabOnline / wsLatencyMs
++- 新端点：`/api/health/align`、`/api/health/qa`、`/api/health/collab`
++
++## 验证
++
++```bash
++cd office-preview-app/server && npm test
++cd office-preview-app/web && npm test
++cd office-preview-app/web && npx playwright test
++```
+diff --git a/files/sample-en.md b/files/sample-en.md
+new file mode 100644
+index 0000000..ea52d6b
+--- /dev/null
++++ b/files/sample-en.md
+@@ -0,0 +1,9 @@
++# Translation Sample (Target — English)
++
++This file is used for end-to-end validation of the translation comparison feature.
++
++Paragraph one: Cloud computing is a model that provides computing resources on demand over the internet. Users can elastically obtain 3 core services—compute, storage, and networking—without building their own data centers.
++
++Paragraph two: In 2026, with the surge in large-model inference demand, GPU shortages became an industry bottleneck. Leading cloud vendors have launched "intelligent computing" products.
++
++Paragraph three: Translation quality management (QA) is a key step in post-editing review. It automatically detects terminology inconsistency, number drift, and punctuation mismatch, significantly reducing review cost.
+diff --git a/files/sample-zh.md b/files/sample-zh.md
+new file mode 100644
+index 0000000..caf0347
+--- /dev/null
++++ b/files/sample-zh.md
+@@ -0,0 +1,12 @@
++# 翻译对照样本（源 — 中文）
++
++本文件用于翻译对比功能的端到端验证。
++
++第一段：云计算（cloud computing）是一种通过互联网按需提供计算资源的模式。
++用户无需自建数据中心，即可弹性获取 3 个核心服务：计算、存储、网络。
++
++第二段：在 2026 年，随着大模型推理需求激增，GPU 短缺成为行业瓶颈。
++头部云厂商纷纷推出「智能算力」产品。
++
++第三段：翻译质量管理（QA）是译后审阅的关键环节，
++自动检测术语不一致、数字漂移、标点错位等问题，可显著降低审阅成本。
+diff --git a/office-preview-app/server/package-lock.json b/office-preview-app/server/package-lock.json
+index 3e84726..f91ed57 100644
+--- a/office-preview-app/server/package-lock.json
++++ b/office-preview-app/server/package-lock.json
+@@ -9,7 +9,8 @@
+       "version": "1.0.0",
+       "dependencies": {
+         "@hyzyla/pdfium": "^2.1.13",
+-        "jsonwebtoken": "^9.0.3"
++        "jsonwebtoken": "^9.0.3",
++        "ws": "^8.21.0"
+       },
+       "devDependencies": {
+         "vitest": "^2.1.9"
+@@ -1557,6 +1558,27 @@
+       "engines": {
+         "node": ">=8"
+       }
++    },
++    "node_modules/ws": {
++      "version": "8.21.0",
++      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
++      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.0.0"
++      },
++      "peerDependencies": {
++        "bufferutil": "^4.0.1",
++        "utf-8-validate": ">=5.0.2"
++      },
++      "peerDependenciesMeta": {
++        "bufferutil": {
++          "optional": true
++        },
++        "utf-8-validate": {
++          "optional": true
++        }
++      }
+     }
+   }
+ }
+diff --git a/office-preview-app/server/package.json b/office-preview-app/server/package.json
+index b999d19..475da79 100644
+--- a/office-preview-app/server/package.json
++++ b/office-preview-app/server/package.json
+@@ -11,7 +11,8 @@
+   },
+   "dependencies": {
+     "@hyzyla/pdfium": "^2.1.13",
+-    "jsonwebtoken": "^9.0.3"
++    "jsonwebtoken": "^9.0.3",
++    "ws": "^8.21.0"
+   },
+   "devDependencies": {
+     "vitest": "^2.1.9"
+diff --git a/office-preview-app/server/src/align.mjs b/office-preview-app/server/src/align.mjs
+new file mode 100644
+index 0000000..eb9fd01
+--- /dev/null
++++ b/office-preview-app/server/src/align.mjs
+@@ -0,0 +1,112 @@
++// 翻译对齐（mock v1）
++// 模型：claude-sonnet-4-6
++//
++// 设计：
++//   - 前端拥有 DOM 段（PDF text-layer span / DOCX <p>），生成 segId 列表传给后端
++//   - 后端只负责「配对」：v1 mock = 按段索引 1:1，score 固定 0.92
++//   - v2 增量位：alignSegments 签名不变，内部换 Gale-Church DP + simhash
++//
++// 落盘：.data/alignments/<id>.json，可重取
++// 可观测：[align] 日志 + alignStats() + /api/health/align
++import fs from 'node:fs'
++import path from 'node:path'
++import crypto from 'node:crypto'
++import { CONFIG } from './config.mjs'
++
++const ALGO_VERSION = 'mock-v1'
++const MOCK_SCORE = 0.92
++
++function alignmentsDir() {
++  // 测试可 override
++  if (process.env.ALIGNMENTS_DIR_OVERRIDE) return process.env.ALIGNMENTS_DIR_OVERRIDE
++  const dir = path.join(CONFIG.DATA_DIR, 'alignments')
++  fs.mkdirSync(dir, { recursive: true })
++  return dir
++}
++
++function uid() {
++  return 'align_' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex')
++}
++
++/**
++ * mock v1 配对算法：按段索引 1:1，min(n,m) 配对，多余段进 unmatched
++ * @param {Array<{id:string,text?:string}>} srcSegs
++ * @param {Array<{id:string,text?:string}>} tgtSegs
++ * @returns {{ pairs: Array<{src,tgt,score}>, unmatched: {src:string[],tgt:string[]}, stats }}
++ */
++export function alignSegments(srcSegs, tgtSegs) {
++  const n = Math.min(srcSegs.length, tgtSegs.length)
++  const pairs = []
++  for (let i = 0; i < n; i++) {
++    pairs.push({ src: srcSegs[i].id, tgt: tgtSegs[i].id, score: MOCK_SCORE })
++  }
++  const unmatched = {
++    src: srcSegs.slice(n).map(s => s.id),
++    tgt: tgtSegs.slice(n).map(s => s.id)
++  }
++  const stats = {
++    algorithm: ALGO_VERSION,
++    matched: pairs.length,
++    srcTotal: srcSegs.length,
++    tgtTotal: tgtSegs.length,
++    scoreAvg: pairs.length ? MOCK_SCORE : 0
++  }
++  return { pairs, unmatched, stats }
++}
++
++/**
++ * 创建并落盘一份对齐结果
++ * @param {{srcTaskId:string,tgtTaskId:string,srcSegs:Array,tgtSegs:Array,granularity?:string}} input
++ */
++export function createAlignment({ srcTaskId, tgtTaskId, srcSegs, tgtSegs, granularity = 'para' }) {
++  const { pairs, unmatched, stats } = alignSegments(srcSegs, tgtSegs)
++  const id = uid()
++  const now = Date.now()
++  const record = {
++    id,
++    srcTaskId,
++    tgtTaskId,
++    granularity,
++    pairs,
++    unmatched,
++    stats,
++    createdAt: now
++  }
++  const file = path.join(alignmentsDir(), id + '.json')
++  fs.writeFileSync(file, JSON.stringify(record, null, 2), 'utf-8')
++  console.log(`[align] created ${id} | src=${srcTaskId}(${srcSegs.length}段) tgt=${tgtTaskId}(${tgtSegs.length}段) matched=${pairs.length}`)
++  return record
++}
++
++/**
++ * 按 id 重取对齐结果
++ * @param {string} id
++ * @returns {object|null}
++ */
++export function getAlignment(id) {
++  const file = path.join(alignmentsDir(), id + '.json')
++  if (!fs.existsSync(file)) {
++    console.warn(`[align] getAlignment not found: ${id}`)
++    return null
++  }
++  return JSON.parse(fs.readFileSync(file, 'utf-8'))
++}
++
++/**
++ * 可观测：当前对齐缓存统计
++ */
++export function alignStats() {
++  const dir = alignmentsDir()
++  if (!fs.existsSync(dir)) {
++    return { total: 0, algorithm: ALGO_VERSION }
++  }
++  const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'))
++  let matched = 0
++  for (const f of files) {
++    try {
++      const r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'))
++      matched += (r.stats?.matched || 0)
++    } catch {}
++  }
++  return { total: files.length, matched, algorithm: ALGO_VERSION }
++}
+diff --git a/office-preview-app/server/src/annotations.mjs b/office-preview-app/server/src/annotations.mjs
+new file mode 100644
+index 0000000..4c4c86d
+--- /dev/null
++++ b/office-preview-app/server/src/annotations.mjs
+@@ -0,0 +1,140 @@
++// 标注 CRUD（真实落盘，非 mock）
++// 模型：claude-sonnet-4-6
++//
++// 数据模型：
++//   Annotation {
++//     id, taskId, userId, userName, color,
++//     anchor: { type: 'segment'|'rect', segId?, rect?: {x,y,w,h,page} },
++//     body, status: 'open'|'resolved',
++//     createdAt, updatedAt
++//   }
++//
++// 存储：.data/annotations/<taskId>.json（单文件，全量重写）
++// 可观测：[annotate] 日志 + annotationStats()
++import fs from 'node:fs'
++import path from 'node:path'
++import crypto from 'node:crypto'
++import { CONFIG } from './config.mjs'
++
++// taskId → annotations[]
++const cache = new Map()
++// taskId → writeTimer
++const writeTimers = new Map()
++
++function dirFor() {
++  if (process.env.ANNOTATIONS_DIR_OVERRIDE) return process.env.ANNOTATIONS_DIR_OVERRIDE
++  const dir = path.join(CONFIG.DATA_DIR, 'annotations')
++  fs.mkdirSync(dir, { recursive: true })
++  return dir
++}
++
++function fileFor(taskId) {
++  // 防路径穿越
++  const safe = String(taskId).replace(/[^a-zA-Z0-9_-]/g, '')
++  return path.join(dirFor(), `${safe}.json`)
++}
++
++function load(taskId) {
++  if (cache.has(taskId)) return cache.get(taskId)
++  const file = fileFor(taskId)
++  let list = []
++  if (fs.existsSync(file)) {
++    try { list = JSON.parse(fs.readFileSync(file, 'utf-8')) } catch { list = [] }
++  }
++  cache.set(taskId, list)
++  return list
++}
++
++function persist(taskId) {
++  // 防抖落盘
++  if (writeTimers.has(taskId)) clearTimeout(writeTimers.get(taskId))
++  const t = setTimeout(() => {
++    const list = cache.get(taskId) || []
++    fs.writeFileSync(fileFor(taskId), JSON.stringify(list, null, 2), 'utf-8')
++    writeTimers.delete(taskId)
++  }, 150)
++  writeTimers.set(taskId, t)
++}
++
++function annId() {
++  return 'ann_' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex')
++}
++
++/**
++ * 创建标注
++ * @param {string} taskId
++ * @param {{anchor:object, body:string, userId:string, userName:string, color:string}} input
++ */
++export function createAnnotation(taskId, input) {
++  const list = load(taskId)
++  const now = Date.now()
++  const ann = {
++    id: annId(),
++    taskId,
++    userId: input.userId,
++    userName: input.userName,
++    color: input.color,
++    anchor: input.anchor,
++    body: input.body,
++    status: 'open',
++    createdAt: now,
++    updatedAt: now
++  }
++  list.push(ann)
++  persist(taskId)
++  console.log(`[annotate] create ${ann.id} | task=${taskId} user=${ann.userName} anchor=${ann.anchor.type}`)
++  return ann
++}
++
++export function listAnnotations(taskId) {
++  return load(taskId)
++}
++
++export function getAnnotation(taskId, id) {
++  const list = load(taskId)
++  return list.find(a => a.id === id) || null
++}
++
++export function updateAnnotation(taskId, id, patch) {
++  const list = load(taskId)
++  const idx = list.findIndex(a => a.id === id)
++  if (idx < 0) return null
++  const updated = { ...list[idx], ...patch, updatedAt: Date.now() }
++  list[idx] = updated
++  persist(taskId)
++  console.log(`[annotate] update ${id} | task=${taskId} patch=${JSON.stringify(Object.keys(patch))}`)
++  return updated
++}
++
++export function deleteAnnotation(taskId, id) {
++  const list = load(taskId)
++  const before = list.length
++  const next = list.filter(a => a.id !== id)
++  if (next.length === before) return false
++  cache.set(taskId, next)
++  persist(taskId)
++  console.log(`[annotate] delete ${id} | task=${taskId}`)
++  return true
++}
++
++/**
++ * 可观测：单 task 标注统计
++ */
++export function annotationStats(taskId) {
++  const list = load(taskId)
++  let open = 0, resolved = 0
++  for (const a of list) {
++    if (a.status === 'resolved') resolved++
++    else open++
++  }
++  return { total: list.length, open, resolved }
++}
++
++/**
++ * 测试专用：清空进程内 cache（磁盘文件不动）
++ */
++export function _resetCacheForTests() {
++  cache.clear()
++  for (const t of writeTimers.values()) clearTimeout(t)
++  writeTimers.clear()
++}
+diff --git a/office-preview-app/server/src/auth.mjs b/office-preview-app/server/src/auth.mjs
+new file mode 100644
+index 0000000..851a595
+--- /dev/null
++++ b/office-preview-app/server/src/auth.mjs
+@@ -0,0 +1,59 @@
++// 匿名身份 + JWT 签发
++// 模型：claude-sonnet-4-6
++import jwt from 'jsonwebtoken'
++import crypto from 'node:crypto'
++import fs from 'node:fs'
++import path from 'node:path'
++import { CONFIG } from './config.mjs'
++
++const SECRET = process.env.COLLAB_JWT_SECRET || CONFIG.ONLYOFFICE_JWT_SECRET || 'office-preview-dev-secret'
++
++const COLORS = ['#f55', '#5b8', '#fa0', '#08c', '#a3f', '#5c3', '#f80', '#0a8']
++const NAMES = ['蓝鲸', '青鸟', '白鹭', '玄燕', '朱鹮', '紫貂', '墨狐', '苍鹰']
++
++function usersDir() {
++  if (process.env.COLLAB_USERS_DIR_OVERRIDE) return process.env.COLLAB_USERS_DIR_OVERRIDE
++  const dir = path.join(CONFIG.DATA_DIR, 'users')
++  fs.mkdirSync(dir, { recursive: true })
++  return dir
++}
++
++function uid() {
++  return 'u_' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex')
++}
++
++/**
++ * 签发匿名身份 + JWT
++ */
++export function issueAnonymous() {
++  const userId = uid()
++  const idx = crypto.randomInt(0, COLORS.length)
++  const userName = NAMES[idx] + '#' + crypto.randomBytes(2).toString('hex')
++  const color = COLORS[idx]
++  const token = jwt.sign(
++    { userId, userName, color, kind: 'anonymous' },
++    SECRET,
++    { expiresIn: '7d' }
++  )
++  // 落盘留底（可观测）
++  try {
++    const file = path.join(usersDir(), userId + '.json')
++    fs.writeFileSync(file, JSON.stringify({ userId, userName, color, createdAt: Date.now() }, null, 2), 'utf-8')
++  } catch (e) {
++    console.warn('[auth] persist user failed:', e.message)
++  }
++  console.log(`[auth] issueAnonymous ${userId} (${userName})`)
++  return { userId, userName, color, token }
++}
++
++/**
++ * 校验 JWT
++ */
++export function verifyToken(token) {
++  if (!token) throw new Error('missing token')
++  return jwt.verify(token, SECRET)
++}
++
++export function authSecret() {
++  return SECRET
++}
+diff --git a/office-preview-app/server/src/collab.mjs b/office-preview-app/server/src/collab.mjs
+new file mode 100644
+index 0000000..3686288
+--- /dev/null
++++ b/office-preview-app/server/src/collab.mjs
+@@ -0,0 +1,161 @@
++// WebSocket 协作 hub（真实实现）
++// 模型：claude-sonnet-4-6
++//
++// 房间 = task:<taskId>，按 taskId 分流
++// 协议（JSON 帧）：
++//   client → server:  { type:'join', taskId, userId, userName, color }
++//                     { type:'annotate', op:'create'|'update'|'delete', annotation }
++//                     { type:'cursor', userId, segId }
++//                     { type:'scroll', userId, segId }
++//                     { type:'highlight', userId, segId }
++//                     { type:'leave' }
++//   server → client:  { type:'presence', users:[...] }
++//                     { type:'annotate', op, annotation }
++//                     { type:'cursor', userId, segId, color }
++//                     { type:'scroll', userId, segId, color }
++//                     { type:'highlight', userId, segId, color }
++//
++// 鉴权：URL ?token=<jwt>，verifyToken 解出 userId
++// 可观测：[collab] 日志 + collabStats() + /api/health/collab
++import { verifyToken } from './auth.mjs'
++
++const ALGO_VERSION = 'ws-v1'
++
++// taskId → Map(userId → { ws, userId, userName, color })
++const rooms = new Map()
++
++function roomOf(taskId) {
++  if (!rooms.has(taskId)) rooms.set(taskId, new Map())
++  return rooms.get(taskId)
++}
++
++function broadcast(taskId, msg, exceptWs = null) {
++  const room = roomOf(taskId)
++  const data = JSON.stringify(msg)
++  for (const [, entry] of room) {
++    if (entry.ws === exceptWs) continue
++    if (entry.ws.readyState === 1 /* OPEN */) {
++      entry.ws.send(data)
++    }
++  }
++}
++
++function sendPresence(taskId, ws) {
++  const room = roomOf(taskId)
++  const users = [...room.values()].map(e => ({
++    userId: e.userId, userName: e.userName, color: e.color
++  }))
++  const data = JSON.stringify({ type: 'presence', users })
++  if (ws) {
++    if (ws.readyState === 1) ws.send(data)
++  } else {
++    broadcast(taskId, { type: 'presence', users })
++  }
++}
++
++/**
++ * 处理 HTTP server 的 upgrade 事件
++ */
++export function handleUpgrade(req, socket, head, wss, url) {
++  const m = url.pathname.match(/^\/collab\/([\w-]+)$/)
++  if (!m) {
++    socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
++    socket.destroy()
++    return
++  }
++  const taskId = m[1]
++  const token = url.searchParams.get('token') || ''
++  let identity
++  try {
++    identity = verifyToken(token)
++  } catch (e) {
++    console.warn(`[collab] auth failed: ${e.message}`)
++    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
++    socket.destroy()
++    return
++  }
++
++  wss.handleUpgrade(req, socket, head, (ws) => {
++    const userId = identity.userId
++    const entry = {
++      ws,
++      userId,
++      userName: identity.userName,
++      color: identity.color,
++      taskId
++    }
++    roomOf(taskId).set(userId, entry)
++    console.log(`[collab] join task=${taskId} user=${userId}(${identity.userName}) | room=${roomOf(taskId).size}`)
++
++    // 通知自己当前 presence
++    sendPresence(taskId, ws)
++    // 通知房间其他人 presence 变化
++    broadcast(taskId, { type: 'presence', users: [...roomOf(taskId).values()].map(e => ({ userId: e.userId, userName: e.userName, color: e.color })) }, ws)
++
++    ws.on('message', (buf) => {
++      let msg
++      try { msg = JSON.parse(buf.toString()) } catch { return }
++      handleMessage(taskId, entry, msg)
++    })
++
++    ws.on('close', () => {
++      const room = roomOf(taskId)
++      room.delete(userId)
++      console.log(`[collab] leave task=${taskId} user=${userId} | room=${room.size}`)
++      if (room.size === 0) {
++        rooms.delete(taskId)
++      } else {
++        // 通知房间 presence 变化
++        const users = [...room.values()].map(e => ({ userId: e.userId, userName: e.userName, color: e.color }))
++        broadcast(taskId, { type: 'presence', users })
++      }
++    })
++  })
++}
++
++function handleMessage(taskId, entry, msg) {
++  const { ws, userId, color } = entry
++  switch (msg.type) {
++    case 'join':
++      // 已在 upgrade 时入房，这里仅重发 presence
++      sendPresence(taskId, ws)
++      break
++    case 'annotate':
++      broadcast(taskId, { type: 'annotate', op: msg.op, annotation: msg.annotation, from: userId }, ws)
++      break
++    case 'cursor':
++      broadcast(taskId, { type: 'cursor', userId, segId: msg.segId, color }, ws)
++      break
++    case 'scroll':
++      broadcast(taskId, { type: 'scroll', userId, segId: msg.segId, color }, ws)
++      break
++    case 'highlight':
++      broadcast(taskId, { type: 'highlight', userId, segId: msg.segId, color }, ws)
++      break
++    case 'leave':
++      // 让 ws 主动关闭
++      break
++    default:
++      console.warn(`[collab] unknown msg type: ${msg.type}`)
++  }
++}
++
++/**
++ * 可观测
++ */
++export function collabStats() {
++  let clients = 0
++  for (const room of rooms.values()) clients += room.size
++  return {
++    algorithm: ALGO_VERSION,
++    rooms: rooms.size,
++    clients
++  }
++}
++
++/**
++ * 测试/复位用
++ */
++export function _resetRoomsForTests() {
++  rooms.clear()
++}
+diff --git a/office-preview-app/server/src/index.mjs b/office-preview-app/server/src/index.mjs
+index f1d1718..b3d8427 100644
+--- a/office-preview-app/server/src/index.mjs
++++ b/office-preview-app/server/src/index.mjs
+@@ -1,11 +1,13 @@
+ // 入口：启动 HTTP 服务 + 首次扫描样本
+ import http from 'node:http'
+ import fs from 'node:fs'
++import { WebSocketServer } from 'ws'
+ import { CONFIG } from './config.mjs'
+ import { route } from './router.mjs'
+ import { scanSamples } from './router.mjs'
+ import { loadTasks } from './store.mjs'
+ import { warmupAll } from './converter.mjs'
++import { handleUpgrade } from './collab.mjs'
+ 
+ function ensureDirs() {
+   for (const d of [CONFIG.DATA_DIR, CONFIG.UPLOAD_DIR, CONFIG.DERIVED_DIR]) {
+@@ -23,12 +25,24 @@ const server = http.createServer((req, res) => {
+   })
+ })
+ 
++// WebSocket 协作 hub：复用 HTTP server upgrade 事件
++const wss = new WebSocketServer({ noServer: true })
++server.on('upgrade', (req, socket, head) => {
++  const url = new URL(req.url, CONFIG.HOST)
++  if (url.pathname.startsWith('/collab/')) {
++    handleUpgrade(req, socket, head, wss, url)
++  } else {
++    socket.destroy()
++  }
++})
++
+ ensureDirs()
+ loadTasks()
+ server.listen(CONFIG.PORT, async () => {
+   console.log(`\x1b[36m[server]\x1b[0m Office Preview 服务已启动: ${CONFIG.HOST}`)
+   console.log(`  数据目录:   ${CONFIG.DATA_DIR}`)
+   console.log(`  样本目录:   ${CONFIG.SAMPLES_DIR}`)
++  console.log(`  WebSocket:  ws://${CONFIG.HOST.replace(/^https?:\/\//, '')}/collab/<taskId>`)
+   // 后台预热 soffice 池（消除首转冷启动）
+   warmupAll().catch(e => console.warn('[server] warmup skipped:', e?.message))
+   // 启动时幂等扫描预置样本
+diff --git a/office-preview-app/server/src/qa.mjs b/office-preview-app/server/src/qa.mjs
+new file mode 100644
+index 0000000..3935e65
+--- /dev/null
++++ b/office-preview-app/server/src/qa.mjs
+@@ -0,0 +1,126 @@
++// 质量检查（mock v1）
++// 模型：claude-sonnet-4-6
++//
++// 设计：
++//   - v1 mock：根据 alignment.pairs 索引硬编码 7 类 issue 样本
++//   - v2 增量位：runQA 签名不变，内部换真实规则引擎
++//
++// 可观测：[qa] 日志 + /api/health/qa
++import crypto from 'node:crypto'
++
++const ALGO_VERSION = 'mock-v1'
++
++function issueId() {
++  return 'qa_' + crypto.randomBytes(4).toString('hex')
++}
++
++/**
++ * mock v1：根据 alignment.pairs 命中段固定为 0/1/2/3/4/5/6 段，覆盖 7 类规则
++ * @param {{id:string}} tgtTask
++ * @param {{id:string}} srcTask
++ * @param {{pairs: Array<{src:string,tgt:string}>}} alignment
++ * @returns {{issues: Array, stats: object}}
++ */
++export function runQA(tgtTask, srcTask, alignment) {
++  const pairs = alignment?.pairs || []
++  if (!pairs.length) {
++    return { issues: [], stats: { algorithm: ALGO_VERSION, total: 0, byRule: {} } }
++  }
++
++  const at = (i) => pairs[Math.min(i, pairs.length - 1)]
++  const issues = [
++    {
++      id: issueId(),
++      rule: 'untranslated',
++      severity: 'error',
++      srcSegId: at(0).src,
++      tgtSegId: at(0).tgt,
++      message: '疑似未译：源段与译段文本完全一致',
++      suggestion: '请确认该段是否需要翻译为对应目标语言'
++    },
++    {
++      id: issueId(),
++      rule: 'punctuation_cn_en',
++      severity: 'warning',
++      srcSegId: at(1).src,
++      tgtSegId: at(1).tgt,
++      message: '中英文标点混用：译段中同时出现「，」与「,」',
++      suggestion: '统一为目标语言标点（中文用全角，英文用半角）'
++    },
++    {
++      id: issueId(),
++      rule: 'number_mismatch',
++      severity: 'error',
++      srcSegId: at(2).src,
++      tgtSegId: at(2).tgt,
++      message: '数字不一致：源段「3 个」→ 译段「3」',
++      suggestion: '保留原文数字与单位「3 个」'
++    },
++    {
++      id: issueId(),
++      rule: 'term_inconsistent',
++      severity: 'warning',
++      srcSegId: at(3).src,
++      tgtSegId: at(3).tgt,
++      message: '术语不一致：「cloud」在不同段中译为「云」与「云端」',
++      suggestion: '统一为频次最高译法「云」'
++    },
++    {
++      id: issueId(),
++      rule: 'whitespace',
++      severity: 'info',
++      srcSegId: at(4).src,
++      tgtSegId: at(4).tgt,
++      message: '行尾多余空白 / 双空格',
++      suggestion: 'trim 行首尾空白，合并连续空格为单空格'
++    },
++    {
++      id: issueId(),
++      rule: 'tag_mismatch',
++      severity: 'error',
++      srcSegId: at(5).src,
++      tgtSegId: at(5).tgt,
++      message: '占位符数量不一致：源段 {0} {1}，译段缺失 {1}',
++      suggestion: '补齐缺失占位符 {1}'
++    },
++    {
++      id: issueId(),
++      rule: 'length_ratio',
++      severity: 'warning',
++      srcSegId: at(6 % pairs.length).src,
++      tgtSegId: at(6 % pairs.length).tgt,
++      message: '译段长度比超出 [0.5, 2.5]，疑似漏译或冗余',
++      suggestion: '核对段是否完整翻译，无遗漏或多余内容'
++    }
++  ]
++
++  // 仅保留 pairs 索引可达的（min(7, pairs.length)）
++  const valid = issues.filter((_, i) => i < pairs.length)
++  const byRule = {}
++  for (const i of valid) byRule[i.rule] = (byRule[i.rule] || 0) + 1
++
++  console.log(`[qa] runQA tgt=${tgtTask?.id} src=${srcTask?.id} | issues=${valid.length}/${pairs.length}段`)
++
++  return {
++    issues: valid,
++    stats: {
++      algorithm: ALGO_VERSION,
++      total: valid.length,
++      byRule
++    }
++  }
++}
++
++/**
++ * 构造纠错建议（v1 不写回原文件）
++ * @param {object} issue
++ */
++export function buildFixSuggestion(issue) {
++  if (!issue) return { ok: false, appliedText: '' }
++  return {
++    ok: true,
++    appliedText: issue.suggestion || '',
++    issueId: issue.id,
++    rule: issue.rule
++  }
++}
+diff --git a/office-preview-app/server/src/router.mjs b/office-preview-app/server/src/router.mjs
+index 22c7ec8..f6fd47b 100644
+--- a/office-preview-app/server/src/router.mjs
++++ b/office-preview-app/server/src/router.mjs
+@@ -9,6 +9,14 @@ import { enqueueConvert } from './converter.mjs'
+ import { ensureLinearized } from './pdf-optimize.mjs'
+ import { extractTextLayer, pdfRenderEngine } from './pdf-rasterize.mjs'
+ import { getPdfiumMetrics } from './pdfium-render.mjs'
++import { createAlignment, getAlignment, alignStats } from './align.mjs'
++import { runQA, buildFixSuggestion } from './qa.mjs'
++import {
++  createAnnotation, listAnnotations, getAnnotation,
++  updateAnnotation, deleteAnnotation, annotationStats
++} from './annotations.mjs'
++import { issueAnonymous, verifyToken } from './auth.mjs'
++import { collabStats } from './collab.mjs'
+ 
+ function sendJSON(res, code, data) {
+   res.setHeader('Access-Control-Allow-Origin', '*')
+@@ -226,6 +234,111 @@ async function handleRoute(req, res, url, pathname) {
+     return sendJSON(res, 200, { engine: pdfRenderEngine() })
+   }
+ 
++  // ============ 翻译对比 / 标注 / 协作 ============
++
++  // 匿名身份签发（前端首次进入协作模式时调用）
++  if (pathname === '/api/auth/anonymous' && req.method === 'POST') {
++    return sendJSON(res, 200, issueAnonymous())
++  }
++
++  // 对齐：创建
++  if (pathname === '/api/align' && req.method === 'POST') {
++    const body = await readBody(req, 1 << 20)
++    const input = JSON.parse(body.toString('utf-8') || '{}')
++    if (!input.srcTaskId || !input.tgtTaskId) {
++      return sendJSON(res, 400, { error: 'srcTaskId/tgtTaskId required' })
++    }
++    if (!Array.isArray(input.srcSegs) || !Array.isArray(input.tgtSegs)) {
++      return sendJSON(res, 400, { error: 'srcSegs/tgtSegs must be arrays' })
++    }
++    const record = createAlignment(input)
++    return sendJSON(res, 200, record)
++  }
++
++  // 对齐：按 id 重取
++  const alignMatch = pathname.match(/^\/api\/align\/([\w-]+)$/)
++  if (alignMatch && req.method === 'GET') {
++    const r = getAlignment(alignMatch[1])
++    if (!r) return sendJSON(res, 404, { error: 'alignment not found' })
++    return sendJSON(res, 200, r)
++  }
++
++  // 对齐健康
++  if (pathname === '/api/health/align') {
++    return sendJSON(res, 200, alignStats())
++  }
++
++  // QA：取检测结果
++  const qaMatch = pathname.match(/^\/api\/qa\/([\w-]+)$/)
++  if (qaMatch && req.method === 'GET') {
++    const taskId = qaMatch[1]
++    const against = url.searchParams.get('against')
++    const alignmentId = url.searchParams.get('alignmentId')
++    const alignment = alignmentId ? getAlignment(alignmentId) : null
++    if (!alignment) {
++      return sendJSON(res, 404, { error: 'alignment not found; pass ?alignmentId=' })
++    }
++    const tgtTask = getTask(taskId)
++    const srcTask = against ? getTask(against) : null
++    const result = runQA(tgtTask || { id: taskId }, srcTask || (against ? { id: against } : null), alignment)
++    return sendJSON(res, 200, result)
++  }
++
++  // QA：纠错建议
++  const qaFixMatch = pathname.match(/^\/api\/qa\/([\w-]+)\/fix$/)
++  if (qaFixMatch && req.method === 'POST') {
++    const body = await readBody(req, 1 << 20)
++    const input = JSON.parse(body.toString('utf-8') || '{}')
++    // 不依赖 DB：前端传 issue 整对象即可（v1）
++    const fix = buildFixSuggestion(input.issue || input)
++    return sendJSON(res, 200, fix)
++  }
++
++  // QA 健康
++  if (pathname === '/api/health/qa') {
++    return sendJSON(res, 200, { algorithm: 'mock-v1' })
++  }
++
++  // 标注 CRUD
++  const annListMatch = pathname.match(/^\/api\/annotations\/([\w-]+)$/)
++  if (annListMatch && req.method === 'GET') {
++    return sendJSON(res, 200, { annotations: listAnnotations(annListMatch[1]), stats: annotationStats(annListMatch[1]) })
++  }
++  if (annListMatch && req.method === 'POST') {
++    const body = await readBody(req, 1 << 20)
++    const input = JSON.parse(body.toString('utf-8') || '{}')
++    if (!input.anchor || !input.body) {
++      return sendJSON(res, 400, { error: 'anchor/body required' })
++    }
++    const ann = createAnnotation(annListMatch[1], input)
++    return sendJSON(res, 200, ann)
++  }
++
++  const annItemMatch = pathname.match(/^\/api\/annotations\/([\w-]+)\/([\w-]+)$/)
++  if (annItemMatch) {
++    const taskId = annItemMatch[1]
++    const annId = annItemMatch[2]
++    if (req.method === 'GET') {
++      const a = getAnnotation(taskId, annId)
++      return a ? sendJSON(res, 200, a) : sendJSON(res, 404, { error: 'annotation not found' })
++    }
++    if (req.method === 'PATCH') {
++      const body = await readBody(req, 1 << 20)
++      const patch = JSON.parse(body.toString('utf-8') || '{}')
++      const a = updateAnnotation(taskId, annId, patch)
++      return a ? sendJSON(res, 200, a) : sendJSON(res, 404, { error: 'annotation not found' })
++    }
++    if (req.method === 'DELETE') {
++      const ok = deleteAnnotation(taskId, annId)
++      return sendJSON(res, ok ? 200 : 404, { ok })
++    }
++  }
++
++  // 协作健康
++  if (pathname === '/api/health/collab') {
++    return sendJSON(res, 200, collabStats())
++  }
++
+   // 扫描样本（开发期手动触发）
+   if (pathname === '/api/scan' && req.method === 'POST') {
+     const n = scanSamples()
+diff --git a/office-preview-app/server/test/align.test.mjs b/office-preview-app/server/test/align.test.mjs
+new file mode 100644
+index 0000000..9df8d71
+--- /dev/null
++++ b/office-preview-app/server/test/align.test.mjs
+@@ -0,0 +1,122 @@
++// align.mjs 测试
++// 模型：claude-sonnet-4-6
++// 覆盖：mock 1:1 配对 / unmatched / 落盘缓存 / 重取 / 版本号
++import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
++import fs from 'node:fs'
++import path from 'node:path'
++import os from 'node:os'
++
++const TMP_ROOT = path.join(os.tmpdir(), 'align-test-' + Date.now())
++process.env.ALIGNMENTS_DIR_OVERRIDE = path.join(TMP_ROOT, 'alignments')
++
++let align, CONFIG
++
++beforeAll(async () => {
++  fs.mkdirSync(path.join(TMP_ROOT, 'alignments'), { recursive: true })
++  align = await import('../src/align.mjs')
++  ;({ CONFIG } = await import('../src/config.mjs'))
++})
++
++afterAll(() => {
++  fs.rmSync(TMP_ROOT, { recursive: true, force: true })
++})
++
++beforeEach(() => {
++  // 清空 alignments 目录，避免用例间污染
++  const dir = path.join(TMP_ROOT, 'alignments')
++  if (fs.existsSync(dir)) {
++    for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f))
++  }
++})
++
++describe('alignSegments (mock v1)', () => {
++  it('按段索引 1:1 配对，score 固定 0.92', () => {
++    const src = [{ id: 's0', text: 'a' }, { id: 's1', text: 'b' }]
++    const tgt = [{ id: 't0', text: 'A' }, { id: 't1', text: 'B' }]
++    const r = align.alignSegments(src, tgt)
++    expect(r.pairs).toHaveLength(2)
++    expect(r.pairs[0]).toEqual({ src: 's0', tgt: 't0', score: 0.92 })
++    expect(r.pairs[1]).toEqual({ src: 's1', tgt: 't1', score: 0.92 })
++  })
++
++  it('源段更多 → 多出来的标 unmatched', () => {
++    const src = [{ id: 's0' }, { id: 's1' }, { id: 's2' }]
++    const tgt = [{ id: 't0' }]
++    const r = align.alignSegments(src, tgt)
++    expect(r.pairs).toHaveLength(1)
++    // min=1，s0 配 t0，s1 s2 unmatched
++    expect(r.unmatched.src.sort()).toEqual(['s1', 's2'])
++    expect(r.unmatched.tgt).toEqual([])
++  })
++
++  it('译段更多 → 多出来的标 unmatched', () => {
++    const src = [{ id: 's0' }]
++    const tgt = [{ id: 't0' }, { id: 't1' }, { id: 't2' }]
++    const r = align.alignSegments(src, tgt)
++    expect(r.pairs).toHaveLength(1)
++    expect(r.unmatched.tgt.sort()).toEqual(['t1', 't2'])
++  })
++
++  it('空输入返回空 pairs', () => {
++    const r = align.alignSegments([], [])
++    expect(r.pairs).toEqual([])
++    expect(r.unmatched.src).toEqual([])
++    expect(r.unmatched.tgt).toEqual([])
++  })
++
++  it('stats 含命中数 / 平均置信度 / 算法版本', () => {
++    const r = align.alignSegments(
++      [{ id: 's0' }, { id: 's1' }],
++      [{ id: 't0' }, { id: 't1' }]
++    )
++    expect(r.stats.algorithm).toBe('mock-v1')
++    expect(r.stats.matched).toBe(2)
++    expect(r.stats.scoreAvg).toBeCloseTo(0.92, 2)
++  })
++})
++
++describe('createAlignment / getAlignment (落盘缓存)', () => {
++  it('createAlignment 返回 id 且落盘到 .data/alignments/<id>.json', () => {
++    const r = align.createAlignment({
++      srcTaskId: 't_src1', tgtTaskId: 't_tgt1',
++      srcSegs: [{ id: 's0', text: 'a' }],
++      tgtSegs: [{ id: 't0', text: 'A' }]
++    })
++    expect(r.id).toMatch(/^align_/)
++    expect(r.pairs).toHaveLength(1)
++    const file = path.join(TMP_ROOT, 'alignments', r.id + '.json')
++    expect(fs.existsSync(file)).toBe(true)
++    const persisted = JSON.parse(fs.readFileSync(file, 'utf-8'))
++    expect(persisted.srcTaskId).toBe('t_src1')
++    expect(persisted.tgtTaskId).toBe('t_tgt1')
++  })
++
++  it('getAlignment 按 id 重取', () => {
++    const created = align.createAlignment({
++      srcTaskId: 't_src2', tgtTaskId: 't_tgt2',
++      srcSegs: [{ id: 's0' }, { id: 's1' }],
++      tgtSegs: [{ id: 't0' }]
++    })
++    const got = align.getAlignment(created.id)
++    expect(got).toBeTruthy()
++    expect(got.pairs).toHaveLength(1)
++    expect(got.unmatched.src).toEqual(['s1'])
++  })
++
++  it('getAlignment 不存在返回 null', () => {
++    expect(align.getAlignment('align_nonexistent')).toBeNull()
++  })
++})
++
++describe('alignStats (可观测)', () => {
++  it('返回当前缓存的对齐数 / 总命中段', () => {
++    align.createAlignment({
++      srcTaskId: 'a1', tgtTaskId: 'a2',
++      srcSegs: [{ id: 's0' }, { id: 's1' }],
++      tgtSegs: [{ id: 't0' }, { id: 't1' }]
++    })
++    const s = align.alignStats()
++    expect(s.total).toBeGreaterThanOrEqual(1)
++    expect(s.algorithm).toBe('mock-v1')
++  })
++})
+diff --git a/office-preview-app/server/test/annotations.test.mjs b/office-preview-app/server/test/annotations.test.mjs
+new file mode 100644
+index 0000000..00757df
+--- /dev/null
++++ b/office-preview-app/server/test/annotations.test.mjs
+@@ -0,0 +1,103 @@
++// annotations.mjs 测试
++// 模型：claude-sonnet-4-6
++// 覆盖：CRUD / segment+rect 双锚 / 落盘 / 按 taskId 隔离 / status 切换
++import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
++import fs from 'node:fs'
++import path from 'node:path'
++import os from 'node:os'
++
++const TMP_ROOT = path.join(os.tmpdir(), 'anno-test-' + Date.now())
++process.env.ANNOTATIONS_DIR_OVERRIDE = path.join(TMP_ROOT, 'annotations')
++
++let ann
++
++beforeAll(async () => {
++  fs.mkdirSync(path.join(TMP_ROOT, 'annotations'), { recursive: true })
++  ann = await import('../src/annotations.mjs')
++})
++
++afterAll(() => {
++  fs.rmSync(TMP_ROOT, { recursive: true, force: true })
++})
++
++beforeEach(() => {
++  const dir = path.join(TMP_ROOT, 'annotations')
++  if (fs.existsSync(dir)) {
++    for (const f of fs.readdirSync(dir)) fs.unlinkSync(path.join(dir, f))
++  }
++  ann._resetCacheForTests()
++})
++
++describe('createAnnotation', () => {
++  it('segment 锚定 → 落盘并返回完整对象', () => {
++    const a = ann.createAnnotation('t1', {
++      anchor: { type: 'segment', segId: 's0' },
++      body: '漏译',
++      userId: 'u1', userName: 'Alice', color: '#f00'
++    })
++    expect(a.id).toMatch(/^ann_/)
++    expect(a.taskId).toBe('t1')
++    expect(a.anchor.segId).toBe('s0')
++    expect(a.status).toBe('open')
++    expect(a.createdAt).toBe(a.updatedAt)
++  })
++
++  it('rect 锚定 → 保存像素坐标', () => {
++    const a = ann.createAnnotation('t1', {
++      anchor: { type: 'rect', rect: { x: 10, y: 20, w: 100, h: 30, page: 1 } },
++      body: '术语',
++      userId: 'u1', userName: 'A', color: '#00f'
++    })
++    expect(a.anchor.rect.page).toBe(1)
++    expect(a.anchor.rect.w).toBe(100)
++  })
++})
++
++describe('listAnnotations', () => {
++  it('按 taskId 隔离（不同 task 互不干扰）', () => {
++    ann.createAnnotation('tA', { anchor: { type: 'segment', segId: 's0' }, body: 'a', userId: 'u', userName: 'u', color: '#000' })
++    ann.createAnnotation('tB', { anchor: { type: 'segment', segId: 's0' }, body: 'b', userId: 'u', userName: 'u', color: '#000' })
++    expect(ann.listAnnotations('tA')).toHaveLength(1)
++    expect(ann.listAnnotations('tB')).toHaveLength(1)
++    expect(ann.listAnnotations('tA')[0].body).toBe('a')
++  })
++})
++
++describe('updateAnnotation', () => {
++  it('改 body / status 同步 updatedAt', async () => {
++    const a = ann.createAnnotation('t1', { anchor: { type: 'segment', segId: 's0' }, body: 'x', userId: 'u', userName: 'u', color: '#000' })
++    await new Promise(r => setTimeout(r, 5))
++    const u = ann.updateAnnotation('t1', a.id, { body: 'y', status: 'resolved' })
++    expect(u.body).toBe('y')
++    expect(u.status).toBe('resolved')
++    expect(u.updatedAt).toBeGreaterThan(a.updatedAt)
++  })
++
++  it('不存在返回 null', () => {
++    expect(ann.updateAnnotation('t1', 'ann_xxx', { body: 'z' })).toBeNull()
++  })
++})
++
++describe('deleteAnnotation', () => {
++  it('删除后 listAnnotations 不再返回', () => {
++    const a = ann.createAnnotation('t1', { anchor: { type: 'segment', segId: 's0' }, body: 'x', userId: 'u', userName: 'u', color: '#000' })
++    expect(ann.deleteAnnotation('t1', a.id)).toBe(true)
++    expect(ann.listAnnotations('t1')).toHaveLength(0)
++  })
++
++  it('不存在返回 false', () => {
++    expect(ann.deleteAnnotation('t1', 'ann_xxx')).toBe(false)
++  })
++})
++
++describe('annotationStats (可观测)', () => {
++  it('返回总数 / open 数 / resolved 数', () => {
++    const a1 = ann.createAnnotation('t1', { anchor: { type: 'segment', segId: 's0' }, body: 'x', userId: 'u', userName: 'u', color: '#000' })
++    ann.createAnnotation('t1', { anchor: { type: 'segment', segId: 's1' }, body: 'y', userId: 'u', userName: 'u', color: '#000' })
++    ann.updateAnnotation('t1', a1.id, { status: 'resolved' })
++    const s = ann.annotationStats('t1')
++    expect(s.total).toBe(2)
++    expect(s.open).toBe(1)
++    expect(s.resolved).toBe(1)
++  })
++})
+diff --git a/office-preview-app/server/test/collab.test.mjs b/office-preview-app/server/test/collab.test.mjs
+new file mode 100644
+index 0000000..9ad33aa
+--- /dev/null
++++ b/office-preview-app/server/test/collab.test.mjs
+@@ -0,0 +1,182 @@
++// collab + auth 测试
++// 模型：claude-sonnet-4-6
++// 覆盖：匿名签发 / JWT 校验 / ws 房间 join / 广播 presence / annotate 广播 / cursor 节流
++import { describe, it, expect, beforeAll, afterAll } from 'vitest'
++import http from 'node:http'
++import fs from 'node:fs'
++import path from 'node:path'
++import os from 'node:os'
++import { WebSocketServer, WebSocket } from 'ws'
++
++process.env.COLLAB_JWT_SECRET = 'collab-test-secret-1234567890'
++const TMP_ROOT = path.join(os.tmpdir(), 'collab-test-' + Date.now())
++process.env.COLLAB_USERS_DIR_OVERRIDE = path.join(TMP_ROOT, 'users')
++fs.mkdirSync(path.join(TMP_ROOT, 'users'), { recursive: true })
++
++let auth, collab, server, wss, baseUrl, port
++
++beforeAll(async () => {
++  auth = await import('../src/auth.mjs')
++  collab = await import('../src/collab.mjs')
++
++  server = http.createServer((req, res) => {
++    if (req.url === '/api/health/collab') {
++      const s = collab.collabStats()
++      res.writeHead(200, { 'Content-Type': 'application/json' })
++      res.end(JSON.stringify(s))
++      return
++    }
++    res.writeHead(404); res.end()
++  })
++  await new Promise(r => server.listen(0, r))
++  port = server.address().port
++  baseUrl = `http://127.0.0.1:${port}`
++
++  wss = new WebSocketServer({ noServer: true })
++  server.on('upgrade', (req, socket, head) => {
++    const u = new URL(req.url, baseUrl)
++    collab.handleUpgrade(req, socket, head, wss, u)
++  })
++})
++
++afterAll(async () => {
++  for (const c of wss.clients) c.close()
++  await new Promise(r => wss.close(r))
++  await new Promise(r => server.close(r))
++  fs.rmSync(TMP_ROOT, { recursive: true, force: true })
++})
++
++function wsConnect(token, taskId) {
++  return new Promise((resolve, reject) => {
++    const ws = new WebSocket(`ws://127.0.0.1:${port}/collab/${taskId}?token=${token}`)
++    ws.on('open', () => resolve(ws))
++    ws.on('error', reject)
++    setTimeout(() => reject(new Error('timeout')), 3000)
++  })
++}
++
++function nextMsg(ws, timeout = 1500) {
++  return new Promise((resolve, reject) => {
++    const onMsg = (data) => {
++      ws.off('message', onMsg)
++      resolve(JSON.parse(data.toString()))
++    }
++    ws.on('message', onMsg)
++    setTimeout(() => reject(new Error('no msg')), timeout)
++  })
++}
++
++describe('auth', () => {
++  it('issueAnonymous 返回 userId/userName/color/token', () => {
++    const u = auth.issueAnonymous()
++    expect(u.userId).toMatch(/^u_/)
++    expect(u.userName).toBeTruthy()
++    expect(u.color).toMatch(/^#/)
++    expect(u.token).toBeTruthy()
++  })
++
++  it('verifyToken 解出 userId', () => {
++    const u = auth.issueAnonymous()
++    const decoded = auth.verifyToken(u.token)
++    expect(decoded.userId).toBe(u.userId)
++  })
++
++  it('无效 token 抛错', () => {
++    expect(() => auth.verifyToken('invalid.token.here')).toThrow()
++  })
++})
++
++describe('collab ws', () => {
++  it('join 后收到 presence（含自己）', async () => {
++    const u = auth.issueAnonymous()
++    const ws = await wsConnect(u.token, 't1')
++    ws.send(JSON.stringify({ type: 'join', taskId: 't1', ...u }))
++    const msg = await nextMsg(ws)
++    expect(msg.type).toBe('presence')
++    expect(msg.users.length).toBeGreaterThanOrEqual(1)
++    expect(msg.users.find(x => x.userId === u.userId)).toBeTruthy()
++    ws.close()
++  })
++
++  it('两个客户端 → 第二个收到含两人的 presence', async () => {
++    const u1 = auth.issueAnonymous()
++    const u2 = auth.issueAnonymous()
++    const ws1 = await wsConnect(u1.token, 't2')
++    ws1.send(JSON.stringify({ type: 'join', taskId: 't2', ...u1 }))
++    await nextMsg(ws1)
++
++    const ws2 = await wsConnect(u2.token, 't2')
++    ws2.send(JSON.stringify({ type: 'join', taskId: 't2', ...u2 }))
++    const msg = await nextMsg(ws2)
++    expect(msg.type).toBe('presence')
++    expect(msg.users.length).toBe(2)
++
++    ws1.close(); ws2.close()
++    // 给服务端时间清理
++    await new Promise(r => setTimeout(r, 100))
++  })
++
++  it('annotate create 广播给房间内其他客户端', async () => {
++    const u1 = auth.issueAnonymous()
++    const u2 = auth.issueAnonymous()
++    const ws1 = await wsConnect(u1.token, 't3')
++    ws1.send(JSON.stringify({ type: 'join', taskId: 't3', ...u1 }))
++    await nextMsg(ws1)
++
++    const ws2 = await wsConnect(u2.token, 't3')
++    ws2.send(JSON.stringify({ type: 'join', taskId: 't3', ...u2 }))
++    await nextMsg(ws2)
++    // ws1 也会收到 ws2 加入的 presence，先消费掉
++    ws1.once('message', () => {})
++
++    ws2.send(JSON.stringify({
++      type: 'annotate', op: 'create',
++      annotation: { id: 'ann_test', body: 'hi', userId: u2.userId }
++    }))
++    const msg = await nextMsg(ws1)
++    expect(msg.type).toBe('annotate')
++    expect(msg.op).toBe('create')
++    expect(msg.annotation.id).toBe('ann_test')
++
++    ws1.close(); ws2.close()
++    await new Promise(r => setTimeout(r, 100))
++  })
++
++  it('未带 token 的连接被拒绝', async () => {
++    await expect(wsConnect('', 't4')).rejects.toBeTruthy()
++  })
++
++  it('cursor 广播给其他人但自己不收', async () => {
++    const u1 = auth.issueAnonymous()
++    const u2 = auth.issueAnonymous()
++    const ws1 = await wsConnect(u1.token, 't5')
++    ws1.send(JSON.stringify({ type: 'join', taskId: 't5', ...u1 }))
++    await nextMsg(ws1)
++
++    const ws2 = await wsConnect(u2.token, 't5')
++    ws2.send(JSON.stringify({ type: 'join', taskId: 't5', ...u2 }))
++    await nextMsg(ws2)
++    ws1.once('message', () => {})
++
++    ws2.send(JSON.stringify({ type: 'cursor', userId: u2.userId, segId: 's0' }))
++    const msg = await nextMsg(ws1)
++    expect(msg.type).toBe('cursor')
++    expect(msg.segId).toBe('s0')
++    ws1.close(); ws2.close()
++    await new Promise(r => setTimeout(r, 100))
++  })
++})
++
++describe('collabStats (可观测)', () => {
++  it('返回 rooms / clients / algorithm', async () => {
++    const u = auth.issueAnonymous()
++    const ws = await wsConnect(u.token, 't6')
++    ws.send(JSON.stringify({ type: 'join', taskId: 't6', ...u }))
++    await nextMsg(ws)
++    const r = await fetch(`http://127.0.0.1:${port}/api/health/collab`).then(x => x.json())
++    expect(r.algorithm).toBe('ws-v1')
++    expect(r.rooms).toBeGreaterThanOrEqual(1)
++    ws.close()
++    await new Promise(r => setTimeout(r, 100))
++  })
++})
+diff --git a/office-preview-app/server/test/qa.test.mjs b/office-preview-app/server/test/qa.test.mjs
+new file mode 100644
+index 0000000..cbbb728
+--- /dev/null
++++ b/office-preview-app/server/test/qa.test.mjs
+@@ -0,0 +1,73 @@
++// qa.mjs 测试
++// 模型：claude-sonnet-4-6
++// 覆盖：mock 7 类 issue / byRule 统计 / fix 返回建议文案不写盘
++import { describe, it, expect, beforeAll } from 'vitest'
++
++let qa
++
++beforeAll(async () => {
++  qa = await import('../src/qa.mjs')
++})
++
++describe('runQA (mock v1)', () => {
++  it('返回 7 类规则的代表 issue', () => {
++    const alignment = {
++      pairs: [
++        { src: 's0', tgt: 't0' },
++        { src: 's1', tgt: 't1' },
++        { src: 's2', tgt: 't2' },
++        { src: 's3', tgt: 't3' },
++        { src: 's4', tgt: 't4' },
++        { src: 's5', tgt: 't5' },
++        { src: 's6', tgt: 't6' }
++      ]
++    }
++    const r = qa.runQA({ id: 't_tgt' }, { id: 't_src' }, alignment)
++    const rules = new Set(r.issues.map(i => i.rule))
++    expect(rules.has('untranslated')).toBe(true)
++    expect(rules.has('number_mismatch')).toBe(true)
++    expect(rules.has('term_inconsistent')).toBe(true)
++    expect(rules.has('punctuation_cn_en')).toBe(true)
++    expect(rules.has('whitespace')).toBe(true)
++    expect(rules.has('tag_mismatch')).toBe(true)
++    expect(rules.has('length_ratio')).toBe(true)
++  })
++
++  it('每条 issue 含 id / severity / srcSegId / tgtSegId / message / suggestion', () => {
++    const alignment = { pairs: [{ src: 's0', tgt: 't0' }] }
++    const r = qa.runQA({ id: 't' }, { id: 's' }, alignment)
++    for (const i of r.issues) {
++      expect(i.id).toBeTruthy()
++      expect(['error', 'warning', 'info']).toContain(i.severity)
++      expect(i.srcSegId || i.tgtSegId).toBeTruthy()
++      expect(typeof i.message).toBe('string')
++      expect(typeof i.suggestion).toBe('string')
++    }
++  })
++
++  it('空 alignment 返回空 issues', () => {
++    const r = qa.runQA({ id: 't' }, { id: 's' }, { pairs: [] })
++    expect(r.issues).toEqual([])
++  })
++
++  it('stats 含 byRule 计数与算法版本', () => {
++    const alignment = { pairs: Array.from({ length: 8 }, (_, i) => ({ src: 's' + i, tgt: 't' + i })) }
++    const r = qa.runQA({ id: 't' }, { id: 's' }, alignment)
++    expect(r.stats.algorithm).toBe('mock-v1')
++    expect(r.stats.total).toBe(r.issues.length)
++    expect(r.stats.byRule).toBeDefined()
++    expect(Object.keys(r.stats.byRule).length).toBeGreaterThanOrEqual(7)
++  })
++})
++
++describe('buildFixSuggestion', () => {
++  it('返回建议文案，不写回原文件', () => {
++    const alignment = { pairs: Array.from({ length: 8 }, (_, i) => ({ src: 's' + i, tgt: 't' + i })) }
++    const { issues } = qa.runQA({ id: 't' }, { id: 's' }, alignment)
++    const issue = issues[0]
++    const fix = qa.buildFixSuggestion(issue)
++    expect(fix.ok).toBe(true)
++    expect(typeof fix.appliedText).toBe('string')
++    expect(fix.appliedText.length).toBeGreaterThan(0)
++  })
++})
+diff --git a/office-preview-app/web/e2e/collab-ws.spec.ts b/office-preview-app/web/e2e/collab-ws.spec.ts
+new file mode 100644
+index 0000000..1261b99
+--- /dev/null
++++ b/office-preview-app/web/e2e/collab-ws.spec.ts
+@@ -0,0 +1,82 @@
++// collab-ws.spec.ts：WebSocket 协作真实链路（两 context 同时连）
++// 模型：claude-sonnet-4-6
++import { test, expect } from '@playwright/test'
++import { WebSocket as WS } from 'ws'
++
++const WS_URL = (taskId: string, token: string) =>
++  `ws://localhost:5180/collab/${taskId}?token=${token}`
++
++async function getIdentity(request: any) {
++  const r = await request.post('http://localhost:5180/api/auth/anonymous')
++  return r.json()
++}
++
++function openWs(url: string): Promise<WS> {
++  return new Promise((resolve, reject) => {
++    const ws = new WS(url)
++    ws.on('open', () => resolve(ws))
++    ws.on('error', reject)
++    setTimeout(() => reject(new Error('timeout')), 5000)
++  })
++}
++
++function nextMsg(ws: WS, timeout = 2000): Promise<any> {
++  return new Promise((resolve, reject) => {
++    const onMsg = (data: any) => {
++      ws.off('message', onMsg)
++      resolve(JSON.parse(data.toString()))
++    }
++    ws.on('message', onMsg)
++    setTimeout(() => reject(new Error('no msg')), timeout)
++  })
++}
++
++test.describe('WebSocket 协作', () => {
++  test('两客户端进入同房间 → 第二个收到含两人的 presence', async ({ request }) => {
++    const u1 = await getIdentity(request)
++    const u2 = await getIdentity(request)
++    const taskId = 'ws_room_' + Date.now()
++    const ws1 = await openWs(WS_URL(taskId, u1.token))
++    ws1.send(JSON.stringify({ type: 'join', taskId, ...u1 }))
++    await nextMsg(ws1)  // 自己的 presence
++
++    const ws2 = await openWs(WS_URL(taskId, u2.token))
++    ws2.send(JSON.stringify({ type: 'join', taskId, ...u2 }))
++    const msg = await nextMsg(ws2)
++    expect(msg.type).toBe('presence')
++    expect(msg.users.length).toBe(2)
++
++    ws1.close(); ws2.close()
++    await new Promise(r => setTimeout(r, 100))
++  })
++
++  test('一端发标注 create → 另一端收到 annotate 广播', async ({ request }) => {
++    const u1 = await getIdentity(request)
++    const u2 = await getIdentity(request)
++    const taskId = 'ws_anno_' + Date.now()
++    const ws1 = await openWs(WS_URL(taskId, u1.token))
++    ws1.send(JSON.stringify({ type: 'join', taskId, ...u1 }))
++    await nextMsg(ws1)
++    const ws2 = await openWs(WS_URL(taskId, u2.token))
++    ws2.send(JSON.stringify({ type: 'join', taskId, ...u2 }))
++    await nextMsg(ws2)
++    // ws1 会收到 ws2 加入的 presence，消费掉
++    await nextMsg(ws1)
++
++    ws2.send(JSON.stringify({
++      type: 'annotate', op: 'create',
++      annotation: { id: 'ann_ws_test', body: '协作批注', userId: u2.userId }
++    }))
++    const msg = await nextMsg(ws1)
++    expect(msg.type).toBe('annotate')
++    expect(msg.op).toBe('create')
++    expect(msg.annotation.id).toBe('ann_ws_test')
++
++    ws1.close(); ws2.close()
++    await new Promise(r => setTimeout(r, 100))
++  })
++
++  test('未带 token 的连接被拒绝', async () => {
++    await expect(openWs('ws://localhost:5180/collab/t_x?token=')).rejects.toBeTruthy()
++  })
++})
+diff --git a/office-preview-app/web/e2e/compare-api.spec.ts b/office-preview-app/web/e2e/compare-api.spec.ts
+new file mode 100644
+index 0000000..dc95a54
+--- /dev/null
++++ b/office-preview-app/web/e2e/compare-api.spec.ts
+@@ -0,0 +1,133 @@
++// compare-api.spec.ts：翻译对比 / 质检 / 标注 / 协作 REST 契约
++// 模型：claude-sonnet-4-6
++import { test, expect } from '@playwright/test'
++
++const API = 'http://localhost:5180'
++
++test.describe('翻译对比 REST API', () => {
++  test('POST /api/align 返回 1:1 配对 + algorithm=mock-v1', async ({ request }) => {
++    const r = await request.post(`${API}/api/align`, {
++      data: {
++        srcTaskId: 't_src', tgtTaskId: 't_tgt',
++        srcSegs: [{ id: 's0', text: 'a' }, { id: 's1', text: 'b' }],
++        tgtSegs: [{ id: 't0', text: 'A' }, { id: 't1', text: 'B' }]
++      }
++    })
++    expect(r.ok()).toBeTruthy()
++    const j = await r.json()
++    expect(j.id).toMatch(/^align_/)
++    expect(j.pairs).toHaveLength(2)
++    expect(j.pairs[0]).toEqual({ src: 's0', tgt: 't0', score: 0.92 })
++    expect(j.stats.algorithm).toBe('mock-v1')
++  })
++
++  test('GET /api/align/:id 重取', async ({ request }) => {
++    const created = await (await request.post(`${API}/api/align`, {
++      data: {
++        srcTaskId: 'a', tgtTaskId: 'b',
++        srcSegs: [{ id: 's0' }], tgtSegs: [{ id: 't0' }]
++      }
++    })).json()
++    const r = await request.get(`${API}/api/align/${created.id}`)
++    expect(r.ok()).toBeTruthy()
++    const j = await r.json()
++    expect(j.id).toBe(created.id)
++  })
++
++  test('GET /api/align/<不存在> → 404', async ({ request }) => {
++    const r = await request.get(`${API}/api/align/align_nonexistent`, { failOnStatusCode: false })
++    expect(r.status()).toBe(404)
++  })
++
++  test('GET /api/health/align 返回 algorithm', async ({ request }) => {
++    const r = await request.get(`${API}/api/health/align`)
++    expect(r.ok()).toBeTruthy()
++    const j = await r.json()
++    expect(j.algorithm).toBe('mock-v1')
++  })
++})
++
++test.describe('质检 API', () => {
++  test('GET /api/qa/:taskId?alignmentId=... 返回 7 类 issue', async ({ request }) => {
++    // 先建一份有 8 段的 align
++    const align = await (await request.post(`${API}/api/align`, {
++      data: {
++        srcTaskId: 's', tgtTaskId: 't_tgt',
++        srcSegs: Array.from({ length: 8 }, (_, i) => ({ id: 's' + i, text: 'seg' + i })),
++        tgtSegs: Array.from({ length: 8 }, (_, i) => ({ id: 't' + i, text: 'SEG' + i }))
++      }
++    })).json()
++    const r = await request.get(`${API}/api/qa/t_tgt?alignmentId=${align.id}&against=s`)
++    expect(r.ok()).toBeTruthy()
++    const j = await r.json()
++    const rules = new Set(j.issues.map((i: any) => i.rule))
++    expect(rules.size).toBeGreaterThanOrEqual(7)
++    expect(j.stats.algorithm).toBe('mock-v1')
++  })
++
++  test('POST /api/qa/:taskId/fix 返回建议文案', async ({ request }) => {
++    const r = await request.post(`${API}/api/qa/t_tgt/fix`, {
++      data: { issue: { id: 'qa_1', rule: 'whitespace', suggestion: 'trim 行尾空白' } }
++    })
++    expect(r.ok()).toBeTruthy()
++    const j = await r.json()
++    expect(j.ok).toBe(true)
++    expect(j.appliedText).toContain('trim')
++  })
++})
++
++test.describe('标注 CRUD API', () => {
++  test('create → list → update → delete 闭环', async ({ request }) => {
++    const taskId = 't_e2e_' + Date.now()
++    // create
++    const created = await (await request.post(`${API}/api/annotations/${taskId}`, {
++      data: {
++        anchor: { type: 'segment', segId: 's0' },
++        body: '漏译',
++        userId: 'u1', userName: 'A', color: '#f00'
++      }
++    })).json()
++    expect(created.id).toMatch(/^ann_/)
++    // list
++    const list = await (await request.get(`${API}/api/annotations/${taskId}`)).json()
++    expect(list.annotations).toHaveLength(1)
++    expect(list.stats.total).toBe(1)
++    // update
++    const upd = await (await request.patch(`${API}/api/annotations/${taskId}/${created.id}`, {
++      data: { status: 'resolved', body: '已确认' }
++    })).json()
++    expect(upd.status).toBe('resolved')
++    expect(upd.body).toBe('已确认')
++    // delete
++    const del = await (await request.delete(`${API}/api/annotations/${taskId}/${created.id}`)).json()
++    expect(del.ok).toBe(true)
++    const after = await (await request.get(`${API}/api/annotations/${taskId}`)).json()
++    expect(after.annotations).toHaveLength(0)
++  })
++
++  test('POST 缺字段 → 400', async ({ request }) => {
++    const r = await request.post(`${API}/api/annotations/t_e2e`, {
++      data: { body: 'x' },
++      failOnStatusCode: false
++    })
++    expect(r.status()).toBe(400)
++  })
++})
++
++test.describe('匿名身份 + 协作健康', () => {
++  test('POST /api/auth/anonymous 返回 token', async ({ request }) => {
++    const r = await request.post(`${API}/api/auth/anonymous`)
++    expect(r.ok()).toBeTruthy()
++    const j = await r.json()
++    expect(j.userId).toMatch(/^u_/)
++    expect(j.token).toBeTruthy()
++    expect(j.color).toMatch(/^#/)
++  })
++
++  test('GET /api/health/collab 返回 algorithm=ws-v1', async ({ request }) => {
++    const r = await request.get(`${API}/api/health/collab`)
++    expect(r.ok()).toBeTruthy()
++    const j = await r.json()
++    expect(j.algorithm).toBe('ws-v1')
++  })
++})
+diff --git a/office-preview-app/web/e2e/compare-ui.spec.ts b/office-preview-app/web/e2e/compare-ui.spec.ts
+new file mode 100644
+index 0000000..06eb68c
+--- /dev/null
++++ b/office-preview-app/web/e2e/compare-ui.spec.ts
+@@ -0,0 +1,30 @@
++// compare-ui.spec.ts：UI 烟雾测试 + 截图回归
++// 模型：claude-sonnet-4-6
++import { test, expect } from '@playwright/test'
++
++test.describe('翻译对比 UI', () => {
++  test('任务列表上 docx 卡片有「对比」按钮', async ({ page }) => {
++    await page.goto('/')
++    await page.waitForTimeout(800)
++    // 至少有一个 docx 卡片含对比按钮（依赖样本扫描）
++    const compareBtn = page.locator('.card .btn-mini:has-text("对比")').first()
++    await expect(compareBtn).toBeVisible({ timeout: 5000 })
++  })
++
++  test('点「对比」→ 弹出译文目标选择器', async ({ page }) => {
++    await page.goto('/')
++    await page.waitForTimeout(800)
++    const compareBtn = page.locator('.card .btn-mini:has-text("对比")').first()
++    await compareBtn.click()
++    await expect(page.locator('.compare-picker')).toBeVisible({ timeout: 5000 })
++    await expect(page.locator('.compare-picker .modal-name')).toContainText('选择译文对照目标')
++  })
++
++  test('取消选择器返回列表', async ({ page }) => {
++    await page.goto('/')
++    await page.waitForTimeout(800)
++    await page.locator('.card .btn-mini:has-text("对比")').first().click()
++    await page.locator('.compare-picker .btn-mini:has-text("取消")').click()
++    await expect(page.locator('.compare-picker')).toHaveCount(0)
++  })
++})
+diff --git a/office-preview-app/web/src/App.tsx b/office-preview-app/web/src/App.tsx
+index e7f4f82..ce14ff6 100644
+--- a/office-preview-app/web/src/App.tsx
++++ b/office-preview-app/web/src/App.tsx
+@@ -3,10 +3,17 @@ import { useStore } from './store'
+ import { UploadDrop } from './components/UploadDrop'
+ import { TaskCard } from './components/TaskCard'
+ import { PreviewModal } from './components/PreviewModal'
++import { CompareView } from './compare/CompareView'
++import { CompareTargetPicker } from './compare/CompareTargetPicker'
+ import type { Task } from './types'
+ 
+ export default function App() {
+-  const { tasks, loading, selected, fetchTasks, select, refreshIfNeeded } = useStore()
++  const {
++    tasks, loading, selected,
++    compareSrc, compareTgt,
++    fetchTasks, select, refreshIfNeeded,
++    startCompare, pickCompareTarget, closeCompare
++  } = useStore()
+   const [query, setQuery] = useState('')
+   const [tab, setTab] = useState<'all' | 'office' | 'media' | 'text'>('all')
+ 
+@@ -89,7 +96,7 @@ export default function App() {
+         ) : (
+           <div className="grid">
+             {filtered.map(t => (
+-              <TaskCard key={t.id} task={t} onPreview={select} />
++              <TaskCard key={t.id} task={t} onPreview={select} onCompare={startCompare} />
+             ))}
+           </div>
+         )}
+@@ -98,6 +105,19 @@ export default function App() {
+       {selected && (
+         <PreviewModal task={selected} onClose={() => select(null)} onDownload={download} />
+       )}
++
++      {compareSrc && !compareTgt && (
++        <CompareTargetPicker
++          src={compareSrc}
++          candidates={tasks}
++          onPick={pickCompareTarget}
++          onCancel={closeCompare}
++        />
++      )}
++
++      {compareSrc && compareTgt && (
++        <CompareView src={compareSrc} tgt={compareTgt} onClose={closeCompare} />
++      )}
+     </div>
+   )
+ }
+diff --git a/office-preview-app/web/src/annotations/AnnotationLayer.tsx b/office-preview-app/web/src/annotations/AnnotationLayer.tsx
+new file mode 100644
+index 0000000..2956734
+--- /dev/null
++++ b/office-preview-app/web/src/annotations/AnnotationLayer.tsx
+@@ -0,0 +1,89 @@
++// AnnotationLayer：覆盖在预览之上，渲染段锚定标注的标记 + 气泡
++// 模型：claude-sonnet-4-6
++// 段锚定：在 root 内找 [data-seg-id] 元素，叠加 .ann-marker 高亮该段
++// rect 锚定：直接在 (x,y,w,h) 位置画框（用于 PDF 图像模式）
++import { useEffect, useState } from 'react'
++import type { Annotation } from './api'
++
++interface Props {
++  annotations: Annotation[]
++  root: HTMLElement | null
++  onResolve: (id: string) => void
++  onDelete: (id: string) => void
++}
++
++interface Positioned {
++  ann: Annotation
++  rect: { left: number; top: number; width: number; height: number }
++}
++
++export function AnnotationLayer({ annotations, root, onResolve, onDelete }: Props) {
++  const [positions, setPositions] = useState<Positioned[]>([])
++
++  useEffect(() => {
++    if (!root) { setPositions([]); return }
++    const compute = () => {
++      const rootRect = root.getBoundingClientRect()
++      const items: Positioned[] = []
++      for (const ann of annotations) {
++        if (ann.anchor.type === 'rect' && ann.anchor.rect) {
++          const { x, y, w, h } = ann.anchor.rect
++          items.push({ ann, rect: { left: x, top: y, width: w, height: h } })
++        } else if (ann.anchor.segId) {
++          const el = root.querySelector(`[data-seg-id="${cssEscape(ann.anchor.segId)}"]`) as HTMLElement | null
++          if (el) {
++            const r = el.getBoundingClientRect()
++            items.push({
++              ann,
++              rect: {
++                left: r.left - rootRect.left,
++                top: r.top - rootRect.top,
++                width: r.width,
++                height: r.height
++              }
++            })
++          }
++        }
++      }
++      setPositions(items)
++    }
++    compute()
++    // DOM 变化（如 PDF 图片懒加载导致布局变化）时重算
++    const mo = new MutationObserver(() => compute())
++    mo.observe(root, { childList: true, subtree: true, attributes: true })
++    window.addEventListener('resize', compute)
++    return () => { mo.disconnect(); window.removeEventListener('resize', compute) }
++  }, [annotations, root])
++
++  return (
++    <div className="annotation-layer">
++      {positions.map(({ ann, rect }) => (
++        <div
++          key={ann.id}
++          className={`ann-marker ${ann.status}`}
++          style={{
++            left: rect.left + 'px',
++            top: rect.top + 'px',
++            width: rect.width + 'px',
++            height: rect.height + 'px'
++          }}
++          title={ann.body}
++        >
++          <div className="ann-bubble" style={{ left: rect.width / 2 + 'px' }}>
++            <div className="ann-author" style={{ color: ann.color }}>{ann.userName}</div>
++            <div>{ann.body}</div>
++            {ann.status === 'open' && (
++              <button className="btn-mini" onClick={() => onResolve(ann.id)}>解决</button>
++            )}{' '}
++            <button className="btn-mini" onClick={() => onDelete(ann.id)}>删除</button>
++          </div>
++        </div>
++      ))}
++    </div>
++  )
++}
++
++function cssEscape(s: string): string {
++  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s)
++  return String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&')
++}
+diff --git a/office-preview-app/web/src/annotations/AnnotationList.tsx b/office-preview-app/web/src/annotations/AnnotationList.tsx
+new file mode 100644
+index 0000000..ea78d9a
+--- /dev/null
++++ b/office-preview-app/web/src/annotations/AnnotationList.tsx
+@@ -0,0 +1,41 @@
++// AnnotationList：右侧抽屉列表
++// 模型：claude-sonnet-4-6
++import type { Annotation } from './api'
++
++interface Props {
++  annotations: Annotation[]
++  onPick: (ann: Annotation) => void
++  onClose: () => void
++}
++
++export function AnnotationList({ annotations, onPick, onClose }: Props) {
++  return (
++    <div className="ann-list">
++      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
++        <strong style={{ flex: 1 }}>标注 ({annotations.length})</strong>
++        <button className="btn-mini" onClick={onClose}>收起 ✕</button>
++      </div>
++      {annotations.length === 0 ? (
++        <div className="hint">尚无标注。拖选一段文字可添加批注。</div>
++      ) : (
++        annotations.map(a => (
++          <div
++            key={a.id}
++            className={`ann-list-item ${a.status}`}
++            onClick={() => onPick(a)}
++          >
++            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
++              <span className="presence-avatar" style={{ background: a.color }}>{a.userName.slice(0, 2)}</span>
++              <span style={{ flex: 1, fontWeight: 600 }}>{a.userName}</span>
++              <span className="chip">{a.status === 'open' ? '待处理' : '已解决'}</span>
++            </div>
++            <div style={{ margin: '4px 0' }}>{a.body}</div>
++            <div className="hint" style={{ fontSize: 10 }}>
++              {a.anchor.type === 'segment' ? `段：${a.anchor.segId}` : `页 ${a.anchor.rect?.page} 矩形`}
++            </div>
++          </div>
++        ))
++      )}
++    </div>
++  )
++}
+diff --git a/office-preview-app/web/src/annotations/api.ts b/office-preview-app/web/src/annotations/api.ts
+new file mode 100644
+index 0000000..09079f8
+--- /dev/null
++++ b/office-preview-app/web/src/annotations/api.ts
+@@ -0,0 +1,52 @@
++// 标注 API client
++// 模型：claude-sonnet-4-6
++export interface AnnotationAnchor {
++  type: 'segment' | 'rect'
++  segId?: string
++  rect?: { x: number; y: number; w: number; h: number; page: number }
++}
++export interface Annotation {
++  id: string
++  taskId: string
++  userId: string
++  userName: string
++  color: string
++  anchor: AnnotationAnchor
++  body: string
++  status: 'open' | 'resolved'
++  createdAt: number
++  updatedAt: number
++}
++
++export async function listAnnotations(taskId: string): Promise<{ annotations: Annotation[]; stats: { total: number; open: number; resolved: number } }> {
++  const r = await fetch(`/api/annotations/${taskId}`)
++  if (!r.ok) throw new Error(`list annotations failed: ${r.status}`)
++  return r.json()
++}
++
++export async function createAnnotation(taskId: string, input: { anchor: AnnotationAnchor; body: string; userId: string; userName: string; color: string }): Promise<Annotation> {
++  const r = await fetch(`/api/annotations/${taskId}`, {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify(input)
++  })
++  if (!r.ok) throw new Error(`create annotation failed: ${r.status}`)
++  return r.json()
++}
++
++export async function updateAnnotation(taskId: string, id: string, patch: Partial<Annotation>): Promise<Annotation> {
++  const r = await fetch(`/api/annotations/${taskId}/${id}`, {
++    method: 'PATCH',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify(patch)
++  })
++  if (!r.ok) throw new Error(`update annotation failed: ${r.status}`)
++  return r.json()
++}
++
++export async function deleteAnnotation(taskId: string, id: string): Promise<boolean> {
++  const r = await fetch(`/api/annotations/${taskId}/${id}`, { method: 'DELETE' })
++  if (!r.ok) return false
++  const j = await r.json()
++  return !!j.ok
++}
+diff --git a/office-preview-app/web/src/annotations/useAnnotations.ts b/office-preview-app/web/src/annotations/useAnnotations.ts
+new file mode 100644
+index 0000000..8be3634
+--- /dev/null
++++ b/office-preview-app/web/src/annotations/useAnnotations.ts
+@@ -0,0 +1,64 @@
++// useAnnotations：本地标注状态 + 后端同步 + 协作广播 reconcile
++// 模型：claude-sonnet-4-6
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { Annotation, listAnnotations, createAnnotation, updateAnnotation, deleteAnnotation } from './api'
++import { usePerf } from '../perf'
++
++export function useAnnotations(taskId: string | null) {
++  const [annotations, setAnnotations] = useState<Annotation[]>([])
++  const [loading, setLoading] = useState(false)
++  // 协作消息 handler（由 useCollab 注入）
++  const collabHandlerRef = useRef<((ann: Annotation, op: string) => void) | null>(null)
++
++  const refresh = useCallback(async () => {
++    if (!taskId) { setAnnotations([]); return }
++    setLoading(true)
++    try {
++      const r = await listAnnotations(taskId)
++      setAnnotations(r.annotations)
++      usePerf.getState().set({
++        annotationsTotal: r.stats.total,
++        annotationsOpen: r.stats.open
++      })
++    } catch (e) {
++      console.warn('[annotations] list failed', e)
++    } finally {
++      setLoading(false)
++    }
++  }, [taskId])
++
++  useEffect(() => { refresh() }, [refresh])
++
++  const create = useCallback(async (input: { anchor: any; body: string; userId: string; userName: string; color: string }) => {
++    if (!taskId) return
++    const ann = await createAnnotation(taskId, input)
++    setAnnotations(prev => prev.find(a => a.id === ann.id) ? prev : [...prev, ann])
++    return ann
++  }, [taskId])
++
++  const update = useCallback(async (id: string, patch: Partial<Annotation>) => {
++    if (!taskId) return
++    const updated = await updateAnnotation(taskId, id, patch)
++    setAnnotations(prev => prev.map(a => a.id === id ? updated : a))
++    return updated
++  }, [taskId])
++
++  const remove = useCallback(async (id: string) => {
++    if (!taskId) return
++    const ok = await deleteAnnotation(taskId, id)
++    if (ok) setAnnotations(prev => prev.filter(a => a.id !== id))
++    return ok
++  }, [taskId])
++
++  // 协作远端写入 → reconcile
++  const applyRemote = useCallback((ann: Annotation, op: string) => {
++    setAnnotations(prev => {
++      if (op === 'delete') return prev.filter(a => a.id !== ann.id)
++      if (op === 'create') return prev.find(a => a.id === ann.id) ? prev : [...prev, ann]
++      if (op === 'update') return prev.map(a => a.id === ann.id ? { ...a, ...ann } : a)
++      return prev
++    })
++  }, [])
++
++  return { annotations, loading, refresh, create, update, remove, applyRemote }
++}
+diff --git a/office-preview-app/web/src/collab/CursorsLayer.tsx b/office-preview-app/web/src/collab/CursorsLayer.tsx
+new file mode 100644
+index 0000000..0dc489c
+--- /dev/null
++++ b/office-preview-app/web/src/collab/CursorsLayer.tsx
+@@ -0,0 +1,49 @@
++// CursorsLayer：远端用户当前段（hover）位置指示
++// 模型：claude-sonnet-4-6
++import { useEffect, useState } from 'react'
++import { useCollab } from './useCollab'
++
++interface Props { root: HTMLElement | null }
++
++interface Positioned { userId: string; userName: string; color: string; segId: string; left: number; top: number }
++
++export function CursorsLayer({ root }: Props) {
++  const { highlight } = useCollab()
++  const [positions, setPositions] = useState<Positioned[]>([])
++
++  useEffect(() => {
++    if (!root) { setPositions([]); return }
++    const compute = () => {
++      const rootRect = root.getBoundingClientRect()
++      const items: Positioned[] = []
++      for (const { userId, segId, color } of Object.values(highlight) as any[]) {
++        const el = root.querySelector(`[data-seg-id="${cssEscape(segId)}"]`) as HTMLElement | null
++        if (el) {
++          const r = el.getBoundingClientRect()
++          items.push({ userId, userName: '', color, segId, left: r.left - rootRect.left + r.width - 2, top: r.top - rootRect.top })
++        }
++      }
++      setPositions(items)
++    }
++    compute()
++  }, [highlight, root])
++
++  return (
++    <div className="annotation-layer">
++      {positions.map(p => (
++        <div
++          key={p.userId}
++          className="collab-cursor"
++          style={{ left: p.left + 'px', top: p.top + 'px', height: 20, background: p.color }}
++        >
++          <span className="collab-cursor-label" style={{ background: p.color }}>{p.userName || p.userId.slice(-4)}</span>
++        </div>
++      ))}
++    </div>
++  )
++}
++
++function cssEscape(s: string): string {
++  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s)
++  return String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&')
++}
+diff --git a/office-preview-app/web/src/collab/PresenceBar.tsx b/office-preview-app/web/src/collab/PresenceBar.tsx
+new file mode 100644
+index 0000000..cfad0bd
+--- /dev/null
++++ b/office-preview-app/web/src/collab/PresenceBar.tsx
+@@ -0,0 +1,32 @@
++// PresenceBar：在线用户头像列表
++// 模型：claude-sonnet-4-6
++import { useCollab } from './useCollab'
++
++export function PresenceBar() {
++  const { users, identity, online } = useCollab()
++  if (!online) return null
++  const others = users.filter(u => u.userId !== identity?.userId)
++  return (
++    <div className="presence-bar">
++      {others.map(u => (
++        <span
++          key={u.userId}
++          className="presence-avatar"
++          style={{ background: u.color }}
++          title={`${u.userName}（在线）`}
++        >
++          {u.userName.slice(0, 1)}
++        </span>
++      ))}
++      {identity && (
++        <span
++          className="presence-avatar"
++          style={{ background: identity.color, borderStyle: 'dashed' }}
++          title={`${identity.userName}（我）`}
++        >
++          我
++        </span>
++      )}
++    </div>
++  )
++}
+diff --git a/office-preview-app/web/src/collab/useCollab.ts b/office-preview-app/web/src/collab/useCollab.ts
+new file mode 100644
+index 0000000..ef7a523
+--- /dev/null
++++ b/office-preview-app/web/src/collab/useCollab.ts
+@@ -0,0 +1,172 @@
++// useCollab：WebSocket 协作 store
++// 模型：claude-sonnet-4-6
++//
++// 功能：
++//   - 首次进入协作：POST /api/auth/anonymous 拿身份 + JWT，localStorage 缓存
++//   - 连 ws /collab/<taskId>?token=<jwt>，发 join
++//   - 接收 presence / annotate / cursor / scroll / highlight 广播
++//   - 暴露 send* 给上层调用
++import { create } from 'zustand'
++import { usePerf } from '../perf'
++
++export interface CollabUser {
++  userId: string
++  userName: string
++  color: string
++}
++export interface CollabCursor { userId: string; segId: string; color: string }
++
++interface Identity extends CollabUser { token: string }
++
++interface CollabState {
++  identity: Identity | null
++  users: CollabUser[]
++  ws: WebSocket | null
++  online: boolean
++  // 远端光标：userId → segId
++  cursors: Record<string, CollabCursor>
++  // 远端高亮（hover）
++  highlight: Record<string, CollabCursor>
++  // 标注远端事件回调（外部注入）
++  onRemoteAnnotation: ((ann: any, op: string) => void) | null
++  onRemoteHighlight: ((segId: string, color: string) => void) | null
++  onRemoteScroll: ((segId: string, color: string) => void) | null
++
++  init: (taskId: string) => Promise<void>
++  close: () => void
++  sendAnnotate: (op: string, annotation: any) => void
++  sendCursor: (segId: string) => void
++  sendHighlight: (segId: string) => void
++  sendScroll: (segId: string) => void
++  setHandlers: (h: Partial<Pick<CollabState, 'onRemoteAnnotation' | 'onRemoteHighlight' | 'onRemoteScroll'>>) => void
++}
++
++const LS_KEY = 'collabIdentity'
++
++function loadIdentity(): Identity | null {
++  try {
++    const s = localStorage.getItem(LS_KEY)
++    if (!s) return null
++    return JSON.parse(s)
++  } catch { return null }
++}
++
++function saveIdentity(id: Identity | null) {
++  try {
++    if (id) localStorage.setItem(LS_KEY, JSON.stringify(id))
++    else localStorage.removeItem(LS_KEY)
++  } catch {}
++}
++
++async function ensureIdentity(): Promise<Identity> {
++  const cached = loadIdentity()
++  if (cached) return cached
++  const r = await fetch('/api/auth/anonymous', { method: 'POST' })
++  if (!r.ok) throw new Error('auth failed')
++  const id = await r.json()
++  const identity = { userId: id.userId, userName: id.userName, color: id.color, token: id.token }
++  saveIdentity(identity)
++  return identity
++}
++
++function wsUrl(taskId: string, token: string): string {
++  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
++  return `${proto}://${location.host}/collab/${taskId}?token=${encodeURIComponent(token)}`
++}
++
++export const useCollab = create<CollabState>((set, get) => ({
++  identity: null,
++  users: [],
++  ws: null,
++  online: false,
++  cursors: {},
++  highlight: {},
++  onRemoteAnnotation: null,
++  onRemoteHighlight: null,
++  onRemoteScroll: null,
++
++  async init(taskId) {
++    // 已连同一 task 跳过
++    const prev = get().ws
++    if (prev && prev.readyState === WebSocket.OPEN && (prev as any).__taskId === taskId) return
++    if (prev) prev.close()
++
++    let identity
++    try {
++      identity = await ensureIdentity()
++      set({ identity })
++    } catch (e) {
++      console.warn('[collab] ensureIdentity failed', e)
++      return
++    }
++
++    const ws = new WebSocket(wsUrl(taskId, identity.token))
++    ;(ws as any).__taskId = taskId
++    ws.onopen = () => {
++      console.log(`[collab] connected task=${taskId} user=${identity.userId}`)
++      set({ online: true })
++      ws.send(JSON.stringify({ type: 'join', taskId, ...identity }))
++    }
++    ws.onclose = () => {
++      console.log('[collab] disconnected')
++      set({ online: false, users: [], cursors: {}, highlight: {} })
++    }
++    ws.onerror = (e) => console.warn('[collab] ws error', e)
++    ws.onmessage = (e) => {
++      let msg
++      try { msg = JSON.parse(e.data) } catch { return }
++      const state = get()
++      switch (msg.type) {
++        case 'presence':
++          set({ users: msg.users || [] })
++          usePerf.getState().set({ collabOnline: (msg.users || []).length })
++          break
++        case 'annotate':
++          state.onRemoteAnnotation?.(msg.annotation, msg.op)
++          break
++        case 'cursor':
++          set({ cursors: { ...state.cursors, [msg.userId]: { userId: msg.userId, segId: msg.segId, color: msg.color } } })
++          break
++        case 'highlight':
++          // hover 是瞬时态，2s 后过期
++          set({ highlight: { ...state.highlight, [msg.userId]: { userId: msg.userId, segId: msg.segId, color: msg.color } } })
++          state.onRemoteHighlight?.(msg.segId, msg.color)
++          setTimeout(() => {
++            const cur = get().highlight
++            if (cur[msg.userId]?.segId === msg.segId) {
++              const next = { ...cur }; delete next[msg.userId]
++              set({ highlight: next })
++            }
++          }, 2000)
++          break
++        case 'scroll':
++          state.onRemoteScroll?.(msg.segId, msg.color)
++          break
++      }
++    }
++    set({ ws })
++  },
++
++  close() {
++    const ws = get().ws
++    if (ws) ws.close()
++    set({ ws: null, online: false, users: [], cursors: {}, highlight: {} })
++  },
++
++  sendAnnotate(op, annotation) {
++    get().ws?.send(JSON.stringify({ type: 'annotate', op, annotation }))
++  },
++  sendCursor(segId) {
++    get().ws?.send(JSON.stringify({ type: 'cursor', userId: get().identity?.userId, segId }))
++  },
++  sendHighlight(segId) {
++    get().ws?.send(JSON.stringify({ type: 'highlight', userId: get().identity?.userId, segId }))
++  },
++  sendScroll(segId) {
++    get().ws?.send(JSON.stringify({ type: 'scroll', userId: get().identity?.userId, segId }))
++  },
++
++  setHandlers(h) {
++    set(h as any)
++  }
++}))
+diff --git a/office-preview-app/web/src/compare/CompareTargetPicker.tsx b/office-preview-app/web/src/compare/CompareTargetPicker.tsx
+new file mode 100644
+index 0000000..8991807
+--- /dev/null
++++ b/office-preview-app/web/src/compare/CompareTargetPicker.tsx
+@@ -0,0 +1,67 @@
++// CompareTargetPicker：选择译文对照目标
++// 模型：claude-sonnet-4-6
++import { useMemo, useState } from 'react'
++import type { Task } from '../types'
++import { fileIcon, humanSize, formatTime } from '../types'
++
++interface Props {
++  src: Task
++  candidates: Task[]
++  onPick: (t: Task) => void
++  onCancel: () => void
++}
++
++export function CompareTargetPicker({ src, candidates, onPick, onCancel }: Props) {
++  const [query, setQuery] = useState('')
++  const filtered = useMemo(() => {
++    const q = query.trim().toLowerCase()
++    return candidates
++      .filter(t => t.id !== src.id)
++      .filter(t => ['docx', 'pdf'].includes((t.previewExt || t.ext).toLowerCase()))
++      .filter(t => !q || t.name.toLowerCase().includes(q))
++  }, [candidates, query, src.id])
++
++  return (
++    <div className="modal-mask" onMouseDown={onCancel}>
++      <div className="modal compare-picker" onMouseDown={e => e.stopPropagation()}>
++        <header className="modal-header">
++          <div className="modal-title">
++            <span className="modal-icon">⇄</span>
++            <div className="modal-name">选择译文对照目标</div>
++          </div>
++          <div className="modal-meta">
++            <span className="chip">源：{src.name}</span>
++          </div>
++          <div className="modal-actions">
++            <button className="btn-mini" onClick={onCancel}>取消 ✕</button>
++          </div>
++        </header>
++        <div className="picker-body">
++          <input
++            className="search"
++            placeholder="搜索文件名…"
++            value={query}
++            onChange={e => setQuery(e.target.value)}
++          />
++          {filtered.length === 0 ? (
++            <div className="center-msg">无可对比文件（仅支持 .docx / .pdf）</div>
++          ) : (
++            <ul className="picker-list">
++              {filtered.map(t => (
++                <li key={t.id}>
++                  <button className="picker-item" onClick={() => onPick(t)}>
++                    <span className={`card-icon icon-${t.ext.slice(0, 4)}`}>{fileIcon(t.ext)}</span>
++                    <span className="picker-name" title={t.name}>{t.name}</span>
++                    <span className="chip">{humanSize(t.size)}</span>
++                    <span className="chip">{formatTime(t.createdAt)}</span>
++                    <span className="picker-cta">选择 →</span>
++                  </button>
++                </li>
++              ))}
++            </ul>
++          )}
++        </div>
++      </div>
++    </div>
++  )
++}
+diff --git a/office-preview-app/web/src/compare/CompareView.tsx b/office-preview-app/web/src/compare/CompareView.tsx
+new file mode 100644
+index 0000000..1e5f8bb
+--- /dev/null
++++ b/office-preview-app/web/src/compare/CompareView.tsx
+@@ -0,0 +1,284 @@
++// CompareView：翻译前后双栏对比预览 + 标注 + 协作 + QA
++// 模型：claude-sonnet-4-6
++//
++// 体验：
++//   - 左源右译，每栏复用现有 PreviewRouter
++//   - 标签段后 hover/click → 对端高亮 + 平滑滚动入视
++//   - 滚动联动：rAF 节流，programmatic flag 防回环
++//   - 顶栏：对齐命中数 / 置信度 / 算法版本（可观测）
++//   - 工具栏开关：批注 / 协作 / 质检
++import { Suspense, useEffect, useRef, useState } from 'react'
++import type { Task } from '../types'
++import { fileIcon, humanSize } from '../types'
++import { PreviewRouter } from '../previewers'
++import { useAlignSync } from './useAlignSync'
++import { extractAndTagSegments, clearSegIds } from './segmentExtract'
++import type { Segment } from './api'
++import { useAnnotations } from '../annotations/useAnnotations'
++import { AnnotationLayer } from '../annotations/AnnotationLayer'
++import { AnnotationList } from '../annotations/AnnotationList'
++import { useCollab } from '../collab/useCollab'
++import { PresenceBar } from '../collab/PresenceBar'
++import { CursorsLayer } from '../collab/CursorsLayer'
++import { fetchQA, fetchQAFix } from './qaApi'
++import type { QAIssue } from './qaApi'
++
++interface Props {
++  src: Task
++  tgt: Task
++  onClose: () => void
++}
++
++function Fallback() {
++  return <div className="center-msg"><div className="spin" /><div className="hint" style={{ marginTop: 10 }}>加载预览器…</div></div>
++}
++
++export function CompareView({ src, tgt, onClose }: Props) {
++  const align = useAlignSync({ srcTaskId: src.id, tgtTaskId: tgt.id })
++  const srcWrapRef = useRef<HTMLDivElement>(null)
++  const tgtWrapRef = useRef<HTMLDivElement>(null)
++  const [srcSegs, setSrcSegs] = useState<Segment[]>([])
++  const [tgtSegs, setTgtSegs] = useState<Segment[]>([])
++  const [srcReady, setSrcReady] = useState(false)
++  const [tgtReady, setTgtReady] = useState(false)
++
++  // 工具栏开关
++  const [annoOn, setAnnoOn] = useState(false)
++  const [collabOn, setCollabOn] = useState(false)
++  const [qaOn, setQaOn] = useState(false)
++  const [qaIssues, setQaIssues] = useState<QAIssue[]>([])
++  const [qaLoading, setQaLoading] = useState(false)
++
++  // 标注 + 协作（房间 = src.id，源 + 译共享一个房间，多人同步）
++  const anno = useAnnotations(src.id)
++  const collab = useCollab()
++
++  useEffect(() => { align.setSrcRoot(srcWrapRef.current) }, [align])
++  useEffect(() => { align.setTgtRoot(tgtWrapRef.current) }, [align])
++
++  // 提取段
++  useEffect(() => {
++    const root = srcWrapRef.current
++    if (!root || !srcReady) return
++    const t = setTimeout(() => {
++      clearSegIds(root)
++      const { segments } = extractAndTagSegments(root, 'src')
++      setSrcSegs(segments)
++    }, 500)
++    return () => clearTimeout(t)
++  }, [srcReady, src.id])
++
++  useEffect(() => {
++    const root = tgtWrapRef.current
++    if (!root || !tgtReady) return
++    const t = setTimeout(() => {
++      clearSegIds(root)
++      const { segments } = extractAndTagSegments(root, 'tgt')
++      setTgtSegs(segments)
++    }, 500)
++    return () => clearTimeout(t)
++  }, [tgtReady, tgt.id])
++
++  // 两栏段都提取完，拉对齐
++  useEffect(() => {
++    if (srcSegs.length && tgtSegs.length) {
++      align.fetchAlign(srcSegs, tgtSegs)
++    }
++  }, [srcSegs, tgtSegs])
++
++  // QA：对齐就绪后拉取
++  useEffect(() => {
++    if (!qaOn || !align.alignment) return
++    setQaLoading(true)
++    fetchQA(tgt.id, align.alignment.id, src.id)
++      .then(r => setQaIssues(r.issues))
++      .catch(e => console.warn('[qa] fetch failed', e))
++      .finally(() => setQaLoading(false))
++  }, [qaOn, align.alignment, src.id, tgt.id])
++
++  // 高亮联动 DOM
++  useEffect(() => {
++    const apply = (root: HTMLElement | null, side: 'src' | 'tgt') => {
++      if (!root) return
++      root.querySelectorAll('[data-seg-id]').forEach(el => {
++        const sid = (el as HTMLElement).dataset.segId || ''
++        const isActive = align.activeSegId === sid
++        const isPartner = side === 'src'
++          ? align.alignment?.pairs.some(p => p.src === sid && p.tgt === align.activeSegId)
++          : align.alignment?.pairs.some(p => p.tgt === sid && p.src === align.activeSegId)
++        el.classList.toggle('seg-active', isActive)
++        el.classList.toggle('seg-partner', !!isPartner)
++      })
++    }
++    apply(srcWrapRef.current, 'src')
++    apply(tgtWrapRef.current, 'tgt')
++  }, [align.activeSegId, align.alignment])
++
++  // 协作：注入回调（远端标注 → 本地 reconcile；远端高亮 → 联动对端）
++  useEffect(() => {
++    collab.setHandlers({
++      onRemoteAnnotation: (ann, op) => anno.applyRemote(ann, op),
++      onRemoteHighlight: (segId) => { /* 由 CursorsLayer 渲染 */ }
++    })
++  }, [collab, anno])
++
++  // 协作：开关切换 → 连接 / 断开
++  useEffect(() => {
++    if (collabOn) {
++      collab.init(src.id).catch(e => console.warn('[collab] init failed', e))
++    } else {
++      collab.close()
++    }
++    return () => { if (!collabOn) collab.close() }
++  }, [collabOn, src.id])
++
++  // hover 联动协作
++  const onSegEvent = (side: 'src' | 'tgt') => (e: React.MouseEvent) => {
++    const target = (e.target as HTMLElement).closest('[data-seg-id]') as HTMLElement | null
++    if (!target) return
++    const segId = target.dataset.segId || ''
++    align.highlight(segId)
++    if (collabOn) collab.sendHighlight(segId)
++  }
++
++  // 双击段 → 弹批注输入框（v1 用 prompt）
++  const onSegDblClick = (side: 'src' | 'tgt') => (e: React.MouseEvent) => {
++    if (!annoOn) return
++    const target = (e.target as HTMLElement).closest('[data-seg-id]') as HTMLElement | null
++    if (!target) return
++    const segId = target.dataset.segId || ''
++    const body = window.prompt('批注内容：')
++    if (!body) return
++    const taskId = side === 'src' ? src.id : tgt.id
++    // 简化：所有批注挂在 src.id 房间
++    anno.create({
++      anchor: { type: 'segment', segId: `${side}:${segId}` },
++      body,
++      userId: collab.identity?.userId || 'anon',
++      userName: collab.identity?.userName || '匿名',
++      color: collab.identity?.color || '#888'
++    }).then(a => {
++      if (collabOn) collab.sendAnnotate('create', a)
++    }).catch(e => console.warn('[annotations] create failed', e))
++  }
++
++  return (
++    <div className="modal-mask compare-mask" onMouseDown={onClose}>
++      <div className="modal compare-modal" onMouseDown={e => e.stopPropagation()}>
++        <header className="modal-header">
++          <div className="modal-title">
++            <span className="modal-icon">⇄</span>
++            <div className="modal-name">{src.name} ⟷ {tgt.name}</div>
++          </div>
++          <div className="modal-meta">
++            {align.alignment ? (
++              <>
++                <span>对齐 {align.alignment.stats.matched} 段</span>
++                <span>·</span>
++                <span>置信度 {(align.alignment.stats.scoreAvg * 100).toFixed(0)}%</span>
++                <span>·</span>
++                <span>{align.alignment.stats.algorithm}</span>
++              </>
++            ) : align.loading ? <span>对齐中…</span> : align.error ? <span className="err">对齐失败</span> : <span>提取段中…</span>}
++          </div>
++          <div className="modal-actions">
++            <button
++              className={`btn-mini ${annoOn ? 'is-active' : ''}`}
++              onClick={() => setAnnoOn(v => !v)}
++              title="在段上双击添加批注"
++            >批注 {anno.annotations.length || ''}</button>
++            <button
++              className={`btn-mini ${collabOn ? 'is-active' : ''}`}
++              onClick={() => setCollabOn(v => !v)}
++              title="开启多人协同"
++            >协作</button>
++            <button
++              className={`btn-mini ${qaOn ? 'is-active' : ''}`}
++              onClick={() => setQaOn(v => !v)}
++              title="质检建议"
++            >质检</button>
++            {collabOn && <PresenceBar />}
++            <button className="btn-mini" onClick={onClose}>关闭 ✕</button>
++          </div>
++        </header>
++        <div className="compare-body" style={{ position: 'relative' }}>
++          <div className="compare-pane" ref={srcWrapRef} onMouseOver={onSegEvent('src')} onDoubleClick={onSegDblClick('src')}>
++            <PaneHeader task={src} side="源" />
++            <Suspense fallback={<Fallback />}>
++              <PreviewRouter task={src} />
++            </Suspense>
++            {annoOn && <AnnotationLayer
++              annotations={anno.annotations.filter(a => a.anchor.segId?.startsWith('src:'))}
++              root={srcWrapRef.current}
++              onResolve={(id) => { anno.update(id, { status: 'resolved' }).then(a => collabOn && collab.sendAnnotate('update', a)) }}
++              onDelete={(id) => { anno.remove(id).then(() => collabOn && collab.sendAnnotate('delete', { id, taskId: src.id })) }}
++            />}
++            {collabOn && <CursorsLayer root={srcWrapRef.current} />}
++          </div>
++          <div className="compare-pane" ref={tgtWrapRef} onMouseOver={onSegEvent('tgt')} onDoubleClick={onSegDblClick('tgt')}>
++            <PaneHeader task={tgt} side="译" />
++            <Suspense fallback={<Fallback />}>
++              <PreviewRouter task={tgt} />
++            </Suspense>
++            {annoOn && <AnnotationLayer
++              annotations={anno.annotations.filter(a => a.anchor.segId?.startsWith('tgt:'))}
++              root={tgtWrapRef.current}
++              onResolve={(id) => { anno.update(id, { status: 'resolved' }).then(a => collabOn && collab.sendAnnotate('update', a)) }}
++              onDelete={(id) => { anno.remove(id).then(() => collabOn && collab.sendAnnotate('delete', { id, taskId: src.id })) }}
++            />}
++            {collabOn && <CursorsLayer root={tgtWrapRef.current} />}
++          </div>
++
++          {annoOn && (
++            <AnnotationList
++              annotations={anno.annotations}
++              onPick={(a) => {
++                const [side, segId] = (a.anchor.segId || '').split(':')
++                const root = side === 'src' ? srcWrapRef.current : tgtWrapRef.current
++                const el = root?.querySelector(`[data-seg-id="${segId}"]`)
++                el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
++                align.highlight(segId)
++              }}
++              onClose={() => setAnnoOn(false)}
++            />
++          )}
++
++          {qaOn && (
++            <div className="qa-list">
++              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
++                <strong style={{ flex: 1 }}>质检 {qaIssues.length}</strong>
++                <button className="btn-mini" onClick={() => setQaOn(false)}>收起 ✕</button>
++              </div>
++              {qaLoading ? <div className="hint">加载中…</div> : qaIssues.length === 0 ? (
++                <div className="hint">无质检建议</div>
++              ) : qaIssues.map(i => (
++                <div key={i.id} className={`qa-item ${i.severity}`}>
++                  <div className="qa-rule">{i.rule}</div>
++                  <div className="qa-msg">{i.message}</div>
++                  <div className="qa-suggestion">建议：{i.suggestion}</div>
++                  <div className="qa-actions">
++                    <button className="btn-mini" onClick={async () => {
++                      const f = await fetchQAFix(tgt.id, i)
++                      if (f.appliedText) navigator.clipboard?.writeText(f.appliedText)
++                    }}>复制建议</button>
++                  </div>
++                </div>
++              ))}
++            </div>
++          )}
++        </div>
++      </div>
++    </div>
++  )
++}
++
++function PaneHeader({ task, side }: { task: Task; side: string }) {
++  return (
++    <div className="compare-pane-header">
++      <span className={`chip chip-side chip-${side === '源' ? 'src' : 'tgt'}`}>{side}</span>
++      <span className="card-icon icon-pdf">{fileIcon(task.ext)}</span>
++      <span className="compare-pane-name" title={task.name}>{task.name}</span>
++      <span className="chip">{humanSize(task.size)}</span>
++    </div>
++  )
++}
+diff --git a/office-preview-app/web/src/compare/api.ts b/office-preview-app/web/src/compare/api.ts
+new file mode 100644
+index 0000000..c9d253b
+--- /dev/null
++++ b/office-preview-app/web/src/compare/api.ts
+@@ -0,0 +1,36 @@
++// 翻译对比 API client
++// 模型：claude-sonnet-4-6
++export interface AlignPair { src: string; tgt: string; score: number }
++export interface AlignUnmatched { src: string[]; tgt: string[] }
++export interface Alignment {
++  id: string
++  srcTaskId: string
++  tgtTaskId: string
++  granularity: string
++  pairs: AlignPair[]
++  unmatched: AlignUnmatched
++  stats: { algorithm: string; matched: number; srcTotal: number; tgtTotal: number; scoreAvg: number }
++  createdAt: number
++}
++
++export interface Segment { id: string; text: string }
++
++export async function postAlign(
++  srcTaskId: string, tgtTaskId: string,
++  srcSegs: Segment[], tgtSegs: Segment[]
++): Promise<Alignment> {
++  const r = await fetch('/api/align', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ srcTaskId, tgtTaskId, srcSegs, tgtSegs, granularity: 'para' })
++  })
++  if (!r.ok) throw new Error(`align failed: ${r.status}`)
++  return r.json()
++}
++
++export async function getAlignment(id: string): Promise<Alignment | null> {
++  const r = await fetch(`/api/align/${id}`)
++  if (r.status === 404) return null
++  if (!r.ok) throw new Error(`get align failed: ${r.status}`)
++  return r.json()
++}
+diff --git a/office-preview-app/web/src/compare/qaApi.ts b/office-preview-app/web/src/compare/qaApi.ts
+new file mode 100644
+index 0000000..5094cb9
+--- /dev/null
++++ b/office-preview-app/web/src/compare/qaApi.ts
+@@ -0,0 +1,33 @@
++// QA API client
++// 模型：claude-sonnet-4-6
++export interface QAIssue {
++  id: string
++  rule: string
++  severity: 'error' | 'warning' | 'info'
++  srcSegId: string
++  tgtSegId: string
++  message: string
++  suggestion: string
++}
++export interface QAResult {
++  issues: QAIssue[]
++  stats: { algorithm: string; total: number; byRule: Record<string, number> }
++}
++
++export async function fetchQA(taskId: string, alignmentId: string, against?: string): Promise<QAResult> {
++  const q = new URLSearchParams({ alignmentId })
++  if (against) q.set('against', against)
++  const r = await fetch(`/api/qa/${taskId}?${q}`)
++  if (!r.ok) throw new Error(`qa failed: ${r.status}`)
++  return r.json()
++}
++
++export async function fetchQAFix(taskId: string, issue: QAIssue): Promise<{ ok: boolean; appliedText: string }> {
++  const r = await fetch(`/api/qa/${taskId}/fix`, {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ issue })
++  })
++  if (!r.ok) throw new Error(`qa fix failed: ${r.status}`)
++  return r.json()
++}
+diff --git a/office-preview-app/web/src/compare/segmentExtract.ts b/office-preview-app/web/src/compare/segmentExtract.ts
+new file mode 100644
+index 0000000..7421776
+--- /dev/null
++++ b/office-preview-app/web/src/compare/segmentExtract.ts
+@@ -0,0 +1,119 @@
++// 段提取：从已渲染的预览 DOM 中识别段落并挂 data-seg-id
++// 模型：claude-sonnet-4-6
++//
++// 两种形态：
++//   - DOCX：mammoth 输出 .docx-article 下的 <p> 直接作为段
++//   - PDF 图片+文字层：.pdf-text-layer 下的 span 按 top（y 坐标）聚合
++//   - PDF.js / WASM：textLayer span 同上（兜底）
++import type { Segment } from './api'
++
++const ROW_TOLERANCE_PX = 6  // top 差 ≤6px 视为同段（同一行/段落）
++
++interface ExtractResult {
++  segments: Segment[]
++  /** 已注入 data-seg-id 的元素列表，便于清理 */
++  elements: HTMLElement[]
++}
++
++/** 提取段并为元素注入 data-seg-id */
++export function extractAndTagSegments(root: HTMLElement, prefix: string): ExtractResult {
++  // DOCX 优先
++  const paragraphs = root.querySelectorAll('.docx-article p, .docx-article li, .docx-article h1, .docx-article h2, .docx-article h3')
++  if (paragraphs.length > 0) {
++    return tagElements(paragraphs, prefix)
++  }
++  // PDF 图片+文字层 / PDF.js textLayer
++  const spans = root.querySelectorAll('.pdf-text-layer span, .textLayer span')
++  if (spans.length > 0) {
++    return tagGroupedSpans(spans, prefix)
++  }
++  // TXT/MD 预览：按 <pre> 内行聚合（TextPreview 输出 <pre>）
++  const pre = root.querySelector('pre')
++  if (pre) {
++    return tagPreLines(pre, prefix)
++  }
++  return { segments: [], elements: [] }
++}
++
++function tagElements(list: NodeListOf<Element>, prefix: string): ExtractResult {
++  const segments: Segment[] = []
++  const elements: HTMLElement[] = []
++  let i = 0
++  for (const el of Array.from(list)) {
++    const text = (el as HTMLElement).textContent || ''
++    if (!text.trim()) continue
++    const segId = `${prefix}-${i}`
++    ;(el as HTMLElement).dataset.segId = segId
++    elements.push(el as HTMLElement)
++    segments.push({ id: segId, text })
++    i++
++  }
++  return { segments, elements }
++}
++
++function tagGroupedSpans(spans: NodeListOf<Element>, prefix: string): ExtractResult {
++  const segments: Segment[] = []
++  const elements: HTMLElement[] = []
++  let groupIdx = 0
++  let groupTop: number | null = null
++  let groupEls: HTMLElement[] = []
++  let groupText = ''
++
++  const flush = () => {
++    if (groupEls.length === 0) return
++    const segId = `${prefix}-${groupIdx}`
++    for (const el of groupEls) el.dataset.segId = segId
++    elements.push(...groupEls)
++    segments.push({ id: segId, text: groupText.trim() })
++    groupIdx++
++    groupTop = null
++    groupEls = []
++    groupText = ''
++  }
++
++  for (const span of Array.from(spans)) {
++    const el = span as HTMLElement
++    const top = parseFloat(el.style.top) || (el.getBoundingClientRect().top)
++    const text = el.textContent || ''
++    if (!text) continue
++    if (groupTop === null || Math.abs(top - groupTop) <= ROW_TOLERANCE_PX) {
++      groupTop = groupTop ?? top
++      groupEls.push(el)
++      groupText += text
++    } else {
++      flush()
++      groupTop = top
++      groupEls.push(el)
++      groupText = text
++    }
++  }
++  flush()
++  return { segments, elements }
++}
++
++function tagPreLines(pre: HTMLElement, prefix: string): ExtractResult {
++  const segments: Segment[] = []
++  const elements: HTMLElement[] = []
++  const lines = (pre.textContent || '').split(/\n\s*\n/)
++  let i = 0
++  for (const line of lines) {
++    if (!line.trim()) continue
++    const segId = `${prefix}-${i}`
++    // 不拆 pre DOM（会破坏排版），仅记录 segId 列表供对齐用
++    segments.push({ id: segId, text: line.trim() })
++    i++
++  }
++  // 给 pre 整体挂第一个 segId（粗粒度，至少能定位）
++  if (segments.length) {
++    pre.dataset.segId = segments[0].id
++    elements.push(pre)
++  }
++  return { segments, elements }
++}
++
++/** 清理注入的 data-seg-id（切换对比目标时用） */
++export function clearSegIds(root: HTMLElement) {
++  root.querySelectorAll('[data-seg-id]').forEach(el => {
++    delete (el as HTMLElement).dataset.segId
++  })
++}
+diff --git a/office-preview-app/web/src/compare/useAlignSync.ts b/office-preview-app/web/src/compare/useAlignSync.ts
+new file mode 100644
+index 0000000..5747508
+--- /dev/null
++++ b/office-preview-app/web/src/compare/useAlignSync.ts
+@@ -0,0 +1,152 @@
++// useAlignSync：拉对齐表 + 双向高亮 + 滚动联动
++// 模型：claude-sonnet-4-6
++//
++// 设计：
++//   - 段定位：DOM 上挂 data-seg-id 属性
++//   - hover/click 一段 → 查 align.pairs → 在对端 DOM 找 [data-seg-id] → 高亮 + 滚动入视
++//   - 滚动联动：主端 scroll → 找视口顶部首个可见段 → 对端 scrollIntoView
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { Alignment, postAlign } from './api'
++import type { Segment } from './api'
++import { usePerf } from '../perf'
++
++interface Options {
++  srcTaskId: string
++  tgtTaskId: string
++  // 在两栏 DOM 渲染完后调用，传入 srcRoot/tgtRoot 让 hook 能查 DOM
++}
++
++export function useAlignSync({ srcTaskId, tgtTaskId }: Options) {
++  const [alignment, setAlignment] = useState<Alignment | null>(null)
++  const [loading, setLoading] = useState(false)
++  const [error, setError] = useState<string | null>(null)
++  const [activeSegId, setActiveSegId] = useState<string | null>(null)
++
++  const srcRootRef = useRef<HTMLElement | null>(null)
++  const tgtRootRef = useRef<HTMLElement | null>(null)
++  // 防回环：自己触发的滚动不再回推
++  const programmaticScrollRef = useRef(false)
++
++  // src→tgt / tgt→src 索引
++  const src2tgt = useRef<Map<string, string>>(new Map())
++  const tgt2src = useRef<Map<string, string>>(new Map())
++
++  // 拉对齐
++  const fetchAlign = useCallback(async (srcSegs: Segment[], tgtSegs: Segment[]) => {
++    setLoading(true); setError(null)
++    const t0 = performance.now()
++    try {
++      const a = await postAlign(srcTaskId, tgtTaskId, srcSegs, tgtSegs)
++      setAlignment(a)
++      src2tgt.current = new Map(a.pairs.map(p => [p.src, p.tgt]))
++      tgt2src.current = new Map(a.pairs.map(p => [p.tgt, p.src]))
++      usePerf.getState().set({
++        alignPairs: a.stats.matched,
++        alignScoreAvg: a.stats.scoreAvg,
++        alignGranularity: a.granularity,
++        alignAlgorithm: a.stats.algorithm,
++        alignLatencyMs: Math.round(performance.now() - t0)
++      })
++    } catch (e: any) {
++      setError(String(e?.message || e))
++    } finally {
++      setLoading(false)
++    }
++  }, [srcTaskId, tgtTaskId])
++
++  const highlight = useCallback((segId: string | null) => {
++    setActiveSegId(segId)
++    if (segId) {
++      // 同步高亮对端
++      const tgt = src2tgt.current.get(segId)
++      const src = tgt2src.current.get(segId)
++      const partnerId = tgt || src
++      if (partnerId) {
++        const root = tgt ? srcRootRef.current : tgtRootRef.current
++        // partner 应在哪个 root：segId 在 src → partner 在 tgt；segId 在 tgt → partner 在 src
++        const searchRoot = tgt ? tgtRootRef.current : srcRootRef.current
++        const el = searchRoot?.querySelector(`[data-seg-id="${cssEscape(partnerId)}"]`)
++        if (el) {
++          programmaticScrollRef.current = true
++          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
++          setTimeout(() => { programmaticScrollRef.current = false }, 400)
++        }
++      }
++    }
++  }, [])
++
++  // 找视口顶部首个可见段
++  const topVisibleSeg = useCallback((root: HTMLElement): string | null => {
++    if (!root) return null
++    const rect = root.getBoundingClientRect()
++    const segs = root.querySelectorAll('[data-seg-id]')
++    for (const el of Array.from(segs)) {
++      const r = (el as HTMLElement).getBoundingClientRect()
++      // 视口顶部 + 100px 容差
++      if (r.bottom > rect.top + 20 && r.top < rect.top + 120) {
++        return (el as HTMLElement).dataset.segId || null
++      }
++    }
++    return null
++  }, [])
++
++  // 双向滚动联动：src scroll → 滚 tgt
++  useEffect(() => {
++    const src = srcRootRef.current
++    const tgt = tgtRootRef.current
++    if (!src || !tgt) return
++
++    let raf = 0
++    const onSrcScroll = () => {
++      if (programmaticScrollRef.current) return
++      if (raf) cancelAnimationFrame(raf)
++      raf = requestAnimationFrame(() => {
++        const segId = topVisibleSeg(src)
++        if (!segId) return
++        const partnerId = src2tgt.current.get(segId)
++        if (!partnerId) return
++        const el = tgt.querySelector(`[data-seg-id="${cssEscape(partnerId)}"]`)
++        if (el) {
++          programmaticScrollRef.current = true
++          el.scrollIntoView({ behavior: 'auto', block: 'start' })
++          requestAnimationFrame(() => { programmaticScrollRef.current = false })
++        }
++      })
++    }
++    const onTgtScroll = () => {
++      if (programmaticScrollRef.current) return
++      if (raf) cancelAnimationFrame(raf)
++      raf = requestAnimationFrame(() => {
++        const segId = topVisibleSeg(tgt)
++        if (!segId) return
++        const partnerId = tgt2src.current.get(segId)
++        if (!partnerId) return
++        const el = src.querySelector(`[data-seg-id="${cssEscape(partnerId)}"]`)
++        if (el) {
++          programmaticScrollRef.current = true
++          el.scrollIntoView({ behavior: 'auto', block: 'start' })
++          requestAnimationFrame(() => { programmaticScrollRef.current = false })
++        }
++      })
++    }
++    src.addEventListener('scroll', onSrcScroll, { passive: true })
++    tgt.addEventListener('scroll', onTgtScroll, { passive: true })
++    return () => {
++      src.removeEventListener('scroll', onSrcScroll)
++      tgt.removeEventListener('scroll', onTgtScroll)
++      if (raf) cancelAnimationFrame(raf)
++    }
++  }, [alignment, topVisibleSeg])
++
++  return {
++    alignment, loading, error, activeSegId,
++    setSrcRoot: (el: HTMLElement | null) => { srcRootRef.current = el },
++    setTgtRoot: (el: HTMLElement | null) => { tgtRootRef.current = el },
++    fetchAlign, highlight
++  }
++}
++
++function cssEscape(s: string): string {
++  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s)
++  return String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&')
++}
+diff --git a/office-preview-app/web/src/components/TaskCard.tsx b/office-preview-app/web/src/components/TaskCard.tsx
+index dffea61..37e3d72 100644
+--- a/office-preview-app/web/src/components/TaskCard.tsx
++++ b/office-preview-app/web/src/components/TaskCard.tsx
+@@ -5,6 +5,7 @@ import { humanSize, formatTime, fileIcon, previewKindOf } from '../types'
+ interface Props {
+   task: Task
+   onPreview: (t: Task) => void
++  onCompare: (t: Task) => void
+ }
+ 
+ const STATUS_META: Record<string, { label: string; cls: string }> = {
+@@ -15,11 +16,13 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
+   failed: { label: '转码失败', cls: 'fail' }
+ }
+ 
+-function TaskCardBase({ task, onPreview }: Props) {
++function TaskCardBase({ task, onPreview, onCompare }: Props) {
+   const kind = previewKindOf(task)
+   const st = STATUS_META[task.convertStatus] || STATUS_META.done
+   const previewable = st.label === '可预览' || task.strategy === 'frontend'
+   const icon = fileIcon(task.ext)
++  // 仅文档类（docx/pdf）支持对比
++  const comparable = previewable && ['docx', 'pdf'].includes((task.previewExt || task.ext).toLowerCase())
+ 
+   return (
+     <div className={`card ${previewable ? '' : 'card-busy'}`}>
+@@ -44,6 +47,16 @@ function TaskCardBase({ task, onPreview }: Props) {
+         >
+           预览
+         </button>
++        {comparable && (
++          <button
++            className="btn-mini"
++            disabled={!previewable}
++            onClick={() => onCompare(task)}
++            title="与另一份译文对照预览"
++          >
++            对比
++          </button>
++        )}
+       </div>
+     </div>
+   )
+diff --git a/office-preview-app/web/src/perf.ts b/office-preview-app/web/src/perf.ts
+index 22ae82d..ea0ae03 100644
+--- a/office-preview-app/web/src/perf.ts
++++ b/office-preview-app/web/src/perf.ts
+@@ -41,6 +41,19 @@ export interface PerfMetrics {
+   pdfiumRenderMs: number    // 最近一页渲染耗时（来自 X-Render-Ms）
+   pdfiumTotalMs: number     // 累计渲染耗时
+   pdfiumCharsTotal: number  // 累计字符数
++  // ============ 翻译对比 / 标注 / 协作可观测 ============
++  alignPairs: number          // 对齐命中段对数
++  alignScoreAvg: number       // 平均对齐置信度
++  alignGranularity: string    // 'para' | 'char'
++  alignLatencyMs: number      // /api/align 往返耗时
++  alignAlgorithm: string      // 'mock-v1' | ...
++  qaIssues: number            // 质检命中数
++  qaByRule: Record<string, number>  // 按规则计数
++  annotationsTotal: number   // 标注总数
++  annotationsOpen: number     // 待处理标注数
++  collabOnline: number        // 在线人数
++  collabRooms: number         // 协作房间数
++  wsLatencyMs: number         // ws ping 往返
+ }
+ 
+ interface PerfStore extends PerfMetrics {
+@@ -58,7 +71,11 @@ const EMPTY: PerfMetrics = {
+   previewSize: 0, ratio: 0,
+   alignErrorAvg: 0, alignErrorMax: 0, alignSamples: 0,
+   renderEngine: 'unknown',
+-  pdfiumRenderMs: 0, pdfiumTotalMs: 0, pdfiumCharsTotal: 0
++  pdfiumRenderMs: 0, pdfiumTotalMs: 0, pdfiumCharsTotal: 0,
++  alignPairs: 0, alignScoreAvg: 0, alignGranularity: 'para', alignLatencyMs: 0, alignAlgorithm: '',
++  qaIssues: 0, qaByRule: {},
++  annotationsTotal: 0, annotationsOpen: 0,
++  collabOnline: 0, collabRooms: 0, wsLatencyMs: 0
+ }
+ 
+ export const usePerf = create<PerfStore>((set) => ({
+diff --git a/office-preview-app/web/src/store.ts b/office-preview-app/web/src/store.ts
+index f7a9d08..b3289c6 100644
+--- a/office-preview-app/web/src/store.ts
++++ b/office-preview-app/web/src/store.ts
+@@ -9,12 +9,19 @@ interface State {
+   uploadPct: number      // 当前上传进度 0..1
+   uploadName: string | null
+   selected: Task | null
++  // 对比模式：src 设置后弹出 target 选择器；tgt 设置后进入 CompareView
++  compareSrc: Task | null
++  compareTgt: Task | null
+   // 拉取一次任务列表
+   fetchTasks: () => Promise<void>
+   // 上传单/多文件（XHR 上传进度）
+   upload: (files: File[]) => Promise<void>
+   // 选中预览
+   select: (t: Task | null) => void
++  // 对比
++  startCompare: (t: Task) => void       // 设置 src，弹出 target 选择器
++  pickCompareTarget: (t: Task) => void  // 设置 tgt，进入 CompareView
++  closeCompare: () => void              // 关闭（清掉两者）
+   // 轮询：当存在 pending/processing 任务时高频刷新
+   refreshIfNeeded: () => Promise<void>
+ }
+@@ -26,6 +33,8 @@ export const useStore = create<State>((set, get) => ({
+   uploadPct: 0,
+   uploadName: null,
+   selected: null,
++  compareSrc: null,
++  compareTgt: null,
+ 
+   async fetchTasks() {
+     set({ loading: true })
+@@ -73,6 +82,20 @@ export const useStore = create<State>((set, get) => ({
+     set({ selected: t })
+   },
+ 
++  startCompare(t) {
++    set({ compareSrc: t, compareTgt: null })
++  },
++
++  pickCompareTarget(t) {
++    const src = get().compareSrc
++    if (!src || src.id === t.id) return  // 不能与自己对比
++    set({ compareTgt: t })
++  },
++
++  closeCompare() {
++    set({ compareSrc: null, compareTgt: null })
++  },
++
+   async refreshIfNeeded() {
+     const { tasks } = get()
+     const busy = tasks.some(t => t.convertStatus === 'pending' || t.convertStatus === 'processing' || t.convertStatus === 'retrying')
+diff --git a/office-preview-app/web/src/styles.css b/office-preview-app/web/src/styles.css
+index 63fc3fe..c8d0968 100644
+--- a/office-preview-app/web/src/styles.css
++++ b/office-preview-app/web/src/styles.css
+@@ -374,3 +374,62 @@ a { color: inherit; text-decoration: none; }
+   background: rgba(47, 107, 255, 0.3);
+   color: transparent;
+ }
++
++/* ============ 翻译对比 + 标注 + 协作 ============ */
++/* 模型：claude-sonnet-4-6 */
++
++.compare-mask { z-index: 1001; }
++.compare-modal { width: 96vw; height: 92vh; max-width: none; }
++.compare-body { display: flex; gap: 1px; height: calc(100% - 56px); background: var(--border, #1e2330); overflow: hidden; }
++.compare-pane { flex: 1; overflow: auto; position: relative; background: var(--bg, #0f1320); padding: 12px; }
++.compare-pane-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bg-2, #1a1f2e); border-radius: 8px; margin-bottom: 10px; position: sticky; top: 0; z-index: 5; }
++.compare-pane-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.chip-side { font-weight: 600; padding: 2px 8px; border-radius: 4px; }
++.chip-src { background: rgba(255, 85, 85, 0.2); color: #ff8888; }
++.chip-tgt { background: rgba(0, 200, 120, 0.2); color: #66e6a3; }
++
++/* 段高亮 */
++[data-seg-id] { transition: background-color 0.15s, outline 0.15s; border-radius: 2px; }
++[data-seg-id]:hover { background: rgba(255, 215, 0, 0.08); }
++.seg-active { background: rgba(255, 215, 0, 0.22) !important; outline: 1px solid rgba(255, 215, 0, 0.5); }
++.seg-partner { background: rgba(91, 136, 255, 0.18) !important; outline: 1px solid rgba(91, 136, 255, 0.5); }
++
++/* 目标选择器 */
++.compare-picker { width: 640px; max-width: 92vw; height: 70vh; }
++.picker-body { padding: 16px; height: calc(100% - 56px); overflow: auto; }
++.picker-list { list-style: none; padding: 0; margin: 12px 0 0; }
++.picker-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--bg-2, #1a1f2e); border: 1px solid transparent; border-radius: 8px; cursor: pointer; color: inherit; }
++.picker-item:hover { border-color: var(--accent, #2b6cff); background: var(--bg-3, #232838); }
++.picker-name { flex: 1; text-align: left; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.picker-cta { color: var(--accent, #2b6cff); font-size: 12px; }
++
++/* 标注层 */
++.annotation-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
++.ann-marker { position: absolute; border: 2px solid; border-radius: 3px; pointer-events: auto; cursor: pointer; }
++.ann-marker.open { border-color: #ff6b6b; background: rgba(255, 107, 107, 0.1); }
++.ann-marker.resolved { border-color: #66e6a3; background: rgba(102, 230, 163, 0.1); }
++.ann-bubble { position: absolute; transform: translate(-50%, -100%); background: var(--bg-3, #232838); border: 1px solid var(--border, #1e2330); padding: 6px 10px; border-radius: 6px; font-size: 12px; max-width: 240px; pointer-events: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
++.ann-bubble .ann-author { font-size: 11px; color: var(--muted, #888); margin-bottom: 2px; }
++
++/* 标注列表 */
++.ann-list { position: absolute; right: 0; top: 0; width: 280px; height: 100%; background: var(--bg-2, #1a1f2e); border-left: 1px solid var(--border, #1e2330); overflow: auto; padding: 10px; z-index: 6; }
++.ann-list-item { padding: 8px 10px; background: var(--bg, #0f1320); border-radius: 6px; margin-bottom: 6px; cursor: pointer; font-size: 12px; }
++.ann-list-item:hover { background: var(--bg-3, #232838); }
++.ann-list-item.resolved { opacity: 0.6; }
++
++/* 协作：远端光标 */
++.collab-cursor { position: absolute; width: 2px; pointer-events: none; z-index: 5; }
++.collab-cursor-label { position: absolute; top: -16px; left: 0; font-size: 10px; padding: 1px 4px; border-radius: 3px; color: #fff; white-space: nowrap; }
++.presence-bar { display: flex; gap: 4px; align-items: center; padding: 0 6px; }
++.presence-avatar { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; border: 2px solid var(--bg, #0f1320); }
++
++/* QA 列表 */
++.qa-list { position: absolute; right: 0; top: 0; width: 320px; height: 100%; background: var(--bg-2, #1a1f2e); border-left: 1px solid var(--border, #1e2330); overflow: auto; padding: 10px; z-index: 6; }
++.qa-item { padding: 8px 10px; background: var(--bg, #0f1320); border-radius: 6px; margin-bottom: 6px; font-size: 12px; border-left: 3px solid; }
++.qa-item.error { border-left-color: #ff5c5c; }
++.qa-item.warning { border-left-color: #ffb84d; }
++.qa-item.info { border-left-color: #5b88ff; }
++.qa-rule { font-weight: 600; }
++.qa-msg { color: var(--muted, #888); margin: 2px 0; }
++.qa-suggestion { color: var(--accent, #2b6cff); }
++.qa-actions { margin-top: 6px; display: flex; gap: 6px; }
+diff --git a/office-preview-app/web/src/ws.d.ts b/office-preview-app/web/src/ws.d.ts
+new file mode 100644
+index 0000000..b065c6f
+--- /dev/null
++++ b/office-preview-app/web/src/ws.d.ts
+@@ -0,0 +1,22 @@
++declare module 'ws' {
++  export class WebSocket {
++    constructor(url: string, protocols?: string | string[])
++    readyState: number
++    onopen: ((ev: any) => void) | null
++    onclose: ((ev: any) => void) | null
++    onerror: ((ev: any) => void) | null
++    onmessage: ((ev: any) => void) | null
++    send(data: string): void
++    close(): void
++    on(event: string, listener: (...args: any[]) => void): void
++    off(event: string, listener: (...args: any[]) => void): void
++    once(event: string, listener: (...args: any[]) => void): void
++  }
++  export class WebSocketServer {
++    constructor(opts?: any)
++    handleUpgrade(req: any, socket: any, head: any, cb: (ws: WebSocket) => void): void
++    clients: Set<WebSocket>
++    close(cb?: () => void): void
++    on(event: string, listener: (...args: any[]) => void): void
++  }
++}
+diff --git a/office-preview-app/web/test-results/v4-selection-alignment.png b/office-preview-app/web/test-results/v4-selection-alignment.png
+deleted file mode 100644
+index 8f2ad0d..0000000
+Binary files a/office-preview-app/web/test-results/v4-selection-alignment.png and /dev/null differ
+diff --git a/office-preview-app/web/test/AnnotationLayer.test.tsx b/office-preview-app/web/test/AnnotationLayer.test.tsx
+new file mode 100644
+index 0000000..d3c301c
+--- /dev/null
++++ b/office-preview-app/web/test/AnnotationLayer.test.tsx
+@@ -0,0 +1,57 @@
++// AnnotationLayer.test.tsx
++// 模型：claude-sonnet-4-6
++import { describe, it, expect } from 'vitest'
++import { render } from '@testing-library/react'
++import { AnnotationLayer } from '../src/annotations/AnnotationLayer'
++import type { Annotation } from '../src/annotations/api'
++
++function makeAnn(over: Partial<Annotation> = {}): Annotation {
++  return {
++    id: 'a1', taskId: 't1', userId: 'u1', userName: 'A', color: '#f00',
++    anchor: { type: 'segment', segId: 's0' },
++    body: 'hi', status: 'open',
++    createdAt: 0, updatedAt: 0,
++    ...over
++  } as Annotation
++}
++
++describe('AnnotationLayer', () => {
++  it('segment 锚定：在 root 内找到 [data-seg-id] 后渲染 marker', () => {
++    const root = document.createElement('div')
++    document.body.appendChild(root)
++    const seg = document.createElement('div')
++    seg.dataset.segId = 's0'
++    seg.style.position = 'absolute'
++    seg.style.left = '10px'
++    seg.style.top = '20px'
++    seg.style.width = '100px'
++    seg.style.height = '20px'
++    root.appendChild(seg)
++    document.body.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1000, bottom: 1000, width: 1000, height: 1000 } as any)
++    root.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1000, bottom: 1000, width: 1000, height: 1000 } as any)
++    seg.getBoundingClientRect = () => ({ left: 10, top: 20, width: 100, height: 20 } as any)
++    const { container } = render(<AnnotationLayer annotations={[makeAnn()]} root={root} onResolve={() => {}} onDelete={() => {}} />)
++    const marker = container.querySelector('.ann-marker')
++    expect(marker).toBeTruthy()
++    expect(marker?.className).toContain('open')
++  })
++
++  it('rect 锚定：直接用 x/y/w/h', () => {
++    const ann = makeAnn({ anchor: { type: 'rect', rect: { x: 5, y: 15, w: 50, h: 30, page: 1 } } })
++    const root = document.createElement('div')
++    document.body.appendChild(root)
++    root.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1000, bottom: 1000, width: 1000, height: 1000 } as any)
++    const { container } = render(<AnnotationLayer annotations={[ann]} root={root} onResolve={() => {}} onDelete={() => {}} />)
++    const marker = container.querySelector('.ann-marker') as HTMLElement
++    expect(marker.style.left).toBe('5px')
++    expect(marker.style.width).toBe('50px')
++  })
++
++  it('无匹配段时不渲染 marker', () => {
++    const root = document.createElement('div')
++    document.body.appendChild(root)
++    root.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1000, bottom: 1000, width: 1000, height: 1000 } as any)
++    const { container } = render(<AnnotationLayer annotations={[makeAnn()]} root={root} onResolve={() => {}} onDelete={() => {}} />)
++    expect(container.querySelector('.ann-marker')).toBeNull()
++  })
++})
+diff --git a/office-preview-app/web/test/TaskCard.test.tsx b/office-preview-app/web/test/TaskCard.test.tsx
+index 4e9c614..d617203 100644
+--- a/office-preview-app/web/test/TaskCard.test.tsx
++++ b/office-preview-app/web/test/TaskCard.test.tsx
+@@ -15,7 +15,7 @@ function task(over: Partial<Task> = {}): Task {
+ 
+ describe('TaskCard（原版 UI + 新数据）', () => {
+   it('默认渲染文本徽章 + 文件名 + 状态 chip', () => {
+-    render(<TaskCard task={task({ name: '郭亚平_前端.pdf' })} onPreview={() => {}} />)
++    render(<TaskCard task={task({ name: '郭亚平_前端.pdf' })} onPreview={() => {}} onCompare={() => {}} />)
+     expect(screen.getByText('郭亚平_前端.pdf')).toBeTruthy()
+     expect(screen.getAllByText('PDF').length).toBeGreaterThan(0)  // kind chip 和 icon 都有 PDF
+     expect(screen.getByText('可预览')).toBeTruthy()
+@@ -24,18 +24,25 @@ describe('TaskCard（原版 UI + 新数据）', () => {
+ 
+   it('点击预览按钮触发回调', () => {
+     const fn = vi.fn()
+-    render(<TaskCard task={task()} onPreview={fn} />)
++    render(<TaskCard task={task()} onPreview={fn} onCompare={() => {}} />)
+     fireEvent.click(screen.getByText('预览'))
+     expect(fn).toHaveBeenCalledTimes(1)
+   })
+ 
++  it('点击「对比」按钮触发 onCompare', () => {
++    const fn = vi.fn()
++    render(<TaskCard task={task()} onPreview={() => {}} onCompare={fn} />)
++    fireEvent.click(screen.getByText('对比'))
++    expect(fn).toHaveBeenCalledTimes(1)
++  })
++
+   it('转码未完成（convert_pdf）时预览按钮禁用', () => {
+-    render(<TaskCard task={task({ strategy: 'convert_pdf', convertStatus: 'processing' })} onPreview={() => {}} />)
++    render(<TaskCard task={task({ strategy: 'convert_pdf', convertStatus: 'processing' })} onPreview={() => {}} onCompare={() => {}} />)
+     expect(screen.getByText('预览').closest('button')?.disabled).toBe(true)
+   })
+ 
+   it('strategy=frontend 时按钮可用（原文件直读）', () => {
+-    render(<TaskCard task={task({ strategy: 'frontend', convertStatus: 'processing' })} onPreview={() => {}} />)
++    render(<TaskCard task={task({ strategy: 'frontend', convertStatus: 'processing' })} onPreview={() => {}} onCompare={() => {}} />)
+     expect(screen.getByText('预览').closest('button')?.disabled).toBe(false)
+   })
+ 
+@@ -43,7 +50,7 @@ describe('TaskCard（原版 UI + 新数据）', () => {
+     render(<TaskCard task={task({
+       convertStatus: 'failed',
+       convertError: 'OnlyOfficeUnreachable: docker socket missing'
+-    })} onPreview={() => {}} />)
++    })} onPreview={() => {}} onCompare={() => {}} />)
+     expect(screen.getByText(/转码失败：OnlyOfficeUnreachable/)).toBeTruthy()
+   })
+ 
+@@ -51,6 +58,6 @@ describe('TaskCard（原版 UI + 新数据）', () => {
+     expect(() => render(<TaskCard task={task({
+       pages: [{ page: 1, url: '/p/1', width: 100, height: 100, bytes: 1000 }],
+       thumbUrl: '/api/files/t1?as=thumb'
+-    })} onPreview={() => {}} />)).not.toThrow()
++    })} onPreview={() => {}} onCompare={() => {}} />)).not.toThrow()
+   })
+ })
+\ No newline at end of file
+diff --git a/office-preview-app/web/test/segmentExtract.test.ts b/office-preview-app/web/test/segmentExtract.test.ts
+new file mode 100644
+index 0000000..3f4fbad
+--- /dev/null
++++ b/office-preview-app/web/test/segmentExtract.test.ts
+@@ -0,0 +1,88 @@
++// segmentExtract.test.ts
++// 模型：claude-sonnet-4-6
++import { describe, it, expect } from 'vitest'
++import { extractAndTagSegments, clearSegIds } from '../src/compare/segmentExtract'
++
++describe('extractAndTagSegments', () => {
++  it('DOCX：<p> 节点 → 段（跳过空段）', () => {
++    const root = document.createElement('div')
++    root.innerHTML = `<article class="docx-article">
++      <p>第一段</p>
++      <p>   </p>
++      <p>第二段</p>
++      <h1>标题</h1>
++    </article>`
++    const { segments, elements } = extractAndTagSegments(root, 'src')
++    expect(segments).toHaveLength(3)
++    expect(segments[0].id).toBe('src-0')
++    expect(segments[0].text).toBe('第一段')
++    expect(segments[2].text).toBe('标题')
++    expect(elements[0].dataset.segId).toBe('src-0')
++  })
++
++  it('PDF：按 top 聚合 span（同 top = 同段）', () => {
++    const root = document.createElement('div')
++    const layer = document.createElement('div')
++    layer.className = 'pdf-text-layer'
++    ;[
++      { top: 10, text: 'Hello ' },
++      { top: 10, text: 'World' },
++      { top: 30, text: 'Second' },
++      { top: 50, text: 'Third' }
++    ].forEach(({ top, text }) => {
++      const s = document.createElement('span')
++      s.style.top = top + 'px'
++      s.style.position = 'absolute'
++      s.textContent = text
++      layer.appendChild(s)
++    })
++    root.appendChild(layer)
++    const { segments } = extractAndTagSegments(root, 'tgt')
++    expect(segments).toHaveLength(3)
++    expect(segments[0].text).toBe('Hello World')
++    expect(segments[1].text).toBe('Second')
++    expect(segments[2].text).toBe('Third')
++  })
++
++  it('PDF：每段内所有 span 共享同一 segId', () => {
++    const root = document.createElement('div')
++    const layer = document.createElement('div')
++    layer.className = 'pdf-text-layer'
++    for (let i = 0; i < 3; i++) {
++      const s = document.createElement('span')
++      s.style.top = '10px'
++      s.textContent = 'a'
++      layer.appendChild(s)
++    }
++    root.appendChild(layer)
++    extractAndTagSegments(root, 'tgt')
++    const ids = new Set([...layer.querySelectorAll('span')].map(s => s.dataset.segId))
++    expect(ids.size).toBe(1)
++  })
++
++  it('TXT/MD：<pre> → 按空行分段', () => {
++    const root = document.createElement('div')
++    const pre = document.createElement('pre')
++    pre.textContent = '第一段\n行2\n\n第二段\n\n第三段'
++    root.appendChild(pre)
++    const { segments } = extractAndTagSegments(root, 'src')
++    expect(segments).toHaveLength(3)
++    expect(segments[0].text).toContain('第一段')
++  })
++
++  it('空 DOM 返回空', () => {
++    const root = document.createElement('div')
++    const r = extractAndTagSegments(root, 'x')
++    expect(r.segments).toEqual([])
++    expect(r.elements).toEqual([])
++  })
++
++  it('clearSegIds 移除所有 data-seg-id', () => {
++    const root = document.createElement('div')
++    root.innerHTML = `<article class="docx-article"><p>a</p><p>b</p></article>`
++    extractAndTagSegments(root, 'src')
++    expect(root.querySelectorAll('[data-seg-id]')).toHaveLength(2)
++    clearSegIds(root)
++    expect(root.querySelectorAll('[data-seg-id]')).toHaveLength(0)
++  })
++})
+diff --git a/office-preview-app/web/test/useAlignSync.test.ts b/office-preview-app/web/test/useAlignSync.test.ts
+new file mode 100644
+index 0000000..5e99ad6
+--- /dev/null
++++ b/office-preview-app/web/test/useAlignSync.test.ts
+@@ -0,0 +1,65 @@
++// useAlignSync.test.ts
++// 模型：claude-sonnet-4-6
++import { describe, it, expect, vi, beforeEach } from 'vitest'
++import { renderHook, act } from '@testing-library/react'
++import { useAlignSync } from '../src/compare/useAlignSync'
++import type { Alignment } from '../src/compare/api'
++
++const MOCK_ALIGN: Alignment = {
++  id: 'align_test', srcTaskId: 's1', tgtTaskId: 't1', granularity: 'para',
++  pairs: [
++    { src: 'src-0', tgt: 'tgt-0', score: 0.92 },
++    { src: 'src-1', tgt: 'tgt-1', score: 0.92 },
++    { src: 'src-2', tgt: 'tgt-2', score: 0.92 }
++  ],
++  unmatched: { src: [], tgt: [] },
++  stats: { algorithm: 'mock-v1', matched: 3, srcTotal: 3, tgtTotal: 3, scoreAvg: 0.92 },
++  createdAt: Date.now()
++}
++
++beforeEach(() => {
++  vi.stubGlobal('fetch', vi.fn(async () => ({
++    ok: true, status: 200,
++    json: async () => MOCK_ALIGN
++  } as any)))
++})
++
++describe('useAlignSync', () => {
++  it('fetchAlign 拉对齐表后写入 alignment', async () => {
++    const { result } = renderHook(() => useAlignSync({ srcTaskId: 's1', tgtTaskId: 't1' }))
++    expect(result.current.alignment).toBeNull()
++    await act(async () => {
++      await result.current.fetchAlign(
++        [{ id: 'src-0', text: 'a' }, { id: 'src-1', text: 'b' }, { id: 'src-2', text: 'c' }],
++        [{ id: 'tgt-0', text: 'A' }, { id: 'tgt-1', text: 'B' }, { id: 'tgt-2', text: 'C' }]
++      )
++    })
++    expect(result.current.alignment).toEqual(MOCK_ALIGN)
++    expect(result.current.error).toBeNull()
++    expect(result.current.loading).toBe(false)
++  })
++
++  it('highlight(segId) 设置 activeSegId', async () => {
++    const { result } = renderHook(() => useAlignSync({ srcTaskId: 's1', tgtTaskId: 't1' }))
++    await act(async () => {
++      await result.current.fetchAlign(
++        [{ id: 'src-0', text: 'a' }, { id: 'src-1', text: 'b' }],
++        [{ id: 'tgt-0', text: 'A' }, { id: 'tgt-1', text: 'B' }]
++      )
++    })
++    act(() => result.current.highlight('src-1'))
++    expect(result.current.activeSegId).toBe('src-1')
++    act(() => result.current.highlight(null))
++    expect(result.current.activeSegId).toBeNull()
++  })
++
++  it('fetch 失败写 error', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500 } as any)))
++    const { result } = renderHook(() => useAlignSync({ srcTaskId: 's1', tgtTaskId: 't1' }))
++    await act(async () => {
++      await result.current.fetchAlign([{ id: 'src-0', text: 'a' }], [{ id: 'tgt-0', text: 'A' }])
++    })
++    expect(result.current.alignment).toBeNull()
++    expect(result.current.error).toBeTruthy()
++  })
++})
+diff --git a/office-preview-app/web/test/useCollab.test.ts b/office-preview-app/web/test/useCollab.test.ts
+new file mode 100644
+index 0000000..030c31b
+--- /dev/null
++++ b/office-preview-app/web/test/useCollab.test.ts
+@@ -0,0 +1,87 @@
++// useCollab.test.ts
++// 模型：claude-sonnet-4-6
++import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
++
++// Mock WebSocket
++class MockWS {
++  static instances: MockWS[] = []
++  static LAST: MockWS | null = null
++  url: string
++  readyState = 0
++  onopen: ((ev: any) => void) | null = null
++  onclose: (() => void) | null = null
++  onerror: ((e: any) => void) | null = null
++  onmessage: ((e: any) => void) | null = null
++  sent: any[] = []
++  constructor(url: string) {
++    this.url = url
++    MockWS.instances.push(this)
++    MockWS.LAST = this
++    setTimeout(() => { this.readyState = 1; this.onopen?.({}) }, 0)
++  }
++  send(data: string) { this.sent.push(JSON.parse(data)) }
++  close() { this.readyState = 3; this.onclose?.() }
++  emit(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }) }
++}
++
++let originalWS: any
++beforeEach(() => {
++  originalWS = (global as any).WebSocket
++  ;(global as any).WebSocket = MockWS
++  MockWS.instances = []
++  MockWS.LAST = null
++  vi.stubGlobal('fetch', vi.fn(async () => ({
++    ok: true, json: async () => ({ userId: 'u1', userName: '蓝鲸', color: '#5b8', token: 'tok' })
++  } as any)))
++  localStorage.clear()
++})
++afterEach(() => {
++  ;(global as any).WebSocket = originalWS
++  vi.restoreAllMocks()
++})
++
++describe('useCollab', () => {
++  it('init → fetch 身份 → 连 ws → 发 join', async () => {
++    const { useCollab } = await import('../src/collab/useCollab')
++    await useCollab.getState().init('task1')
++    // 等异步 ws onopen
++    await new Promise(r => setTimeout(r, 10))
++    expect(MockWS.LAST).toBeTruthy()
++    expect(MockWS.LAST!.url).toContain('/collab/task1')
++    expect(MockWS.LAST!.url).toContain('token=')
++    expect(MockWS.LAST!.sent.some(m => m.type === 'join')).toBe(true)
++    expect(useCollab.getState().identity?.userId).toBe('u1')
++    expect(useCollab.getState().online).toBe(true)
++    useCollab.getState().close()
++  })
++
++  it('presence 消息更新 users', async () => {
++    const { useCollab } = await import('../src/collab/useCollab')
++    await useCollab.getState().init('task2')
++    await new Promise(r => setTimeout(r, 10))
++    MockWS.LAST!.emit({ type: 'presence', users: [{ userId: 'a', userName: 'A', color: '#f00' }] })
++    expect(useCollab.getState().users).toHaveLength(1)
++    useCollab.getState().close()
++  })
++
++  it('annotate 消息触发 onRemoteAnnotation 回调', async () => {
++    const { useCollab } = await import('../src/collab/useCollab')
++    const handler = vi.fn()
++    await useCollab.getState().init('task3')
++    useCollab.getState().setHandlers({ onRemoteAnnotation: handler })
++    await new Promise(r => setTimeout(r, 10))
++    MockWS.LAST!.emit({ type: 'annotate', op: 'create', annotation: { id: 'a1', body: 'hi' } })
++    expect(handler).toHaveBeenCalledWith({ id: 'a1', body: 'hi' }, 'create')
++    useCollab.getState().close()
++  })
++
++  it('sendCursor 发出 cursor 帧', async () => {
++    const { useCollab } = await import('../src/collab/useCollab')
++    await useCollab.getState().init('task4')
++    await new Promise(r => setTimeout(r, 10))
++    MockWS.LAST!.sent = []
++    useCollab.getState().sendCursor('seg-3')
++    expect(MockWS.LAST!.sent.some(m => m.type === 'cursor' && m.segId === 'seg-3')).toBe(true)
++    useCollab.getState().close()
++  })
++})
+diff --git a/office-preview-app/web/tsconfig.tsbuildinfo b/office-preview-app/web/tsconfig.tsbuildinfo
+index c2b3260..8f800c1 100644
+--- a/office-preview-app/web/tsconfig.tsbuildinfo
++++ b/office-preview-app/web/tsconfig.tsbuildinfo
+@@ -1 +1 @@
+-{"root":["./src/app.tsx","./src/main.tsx","./src/perf.ts","./src/store.ts","./src/types.ts","./src/vite-env.d.ts","./src/components/perfpanel.tsx","./src/components/previewmodal.tsx","./src/components/taskcard.tsx","./src/components/uploaddrop.tsx","./src/previewers/docxpreview.tsx","./src/previewers/mediapreview.tsx","./src/previewers/pdfimagespreview.tsx","./src/previewers/pdfpreview.tsx","./src/previewers/pdfpreviewwasm.tsx","./src/previewers/textpreview.tsx","./src/previewers/index.tsx","./src/utils/predictive-render.ts","./test/pdfimagespreview.test.tsx","./test/previewmodal.test.tsx","./test/taskcard.test.tsx","./test/setup.ts","./test/types.test.ts","./e2e/image-with-text.spec.ts","./e2e/mode-toggle.spec.ts","./e2e/screenshot-align.spec.ts","./e2e/screenshot-alignment.spec.ts","./e2e/screenshot-debug.spec.ts","./e2e/screenshot-selection.spec.ts","./e2e/smoke.spec.ts","./e2e/text-image-alignment.spec.ts","./playwright.config.ts","./vitest.config.ts"],"errors":true,"version":"5.9.3"}
+\ No newline at end of file
++{"root":["./src/app.tsx","./src/main.tsx","./src/perf.ts","./src/store.ts","./src/types.ts","./src/vite-env.d.ts","./src/ws.d.ts","./src/annotations/annotationlayer.tsx","./src/annotations/annotationlist.tsx","./src/annotations/api.ts","./src/annotations/useannotations.ts","./src/collab/cursorslayer.tsx","./src/collab/presencebar.tsx","./src/collab/usecollab.ts","./src/compare/comparetargetpicker.tsx","./src/compare/compareview.tsx","./src/compare/api.ts","./src/compare/qaapi.ts","./src/compare/segmentextract.ts","./src/compare/usealignsync.ts","./src/components/perfpanel.tsx","./src/components/previewmodal.tsx","./src/components/taskcard.tsx","./src/components/uploaddrop.tsx","./src/previewers/docxpreview.tsx","./src/previewers/mediapreview.tsx","./src/previewers/pdfimagespreview.tsx","./src/previewers/pdfpreview.tsx","./src/previewers/pdfpreviewwasm.tsx","./src/previewers/textpreview.tsx","./src/previewers/index.tsx","./src/utils/predictive-render.ts","./test/annotationlayer.test.tsx","./test/pdfimagespreview.test.tsx","./test/previewmodal.test.tsx","./test/taskcard.test.tsx","./test/segmentextract.test.ts","./test/setup.ts","./test/types.test.ts","./test/usealignsync.test.ts","./test/usecollab.test.ts","./e2e/collab-ws.spec.ts","./e2e/compare-api.spec.ts","./e2e/compare-ui.spec.ts","./e2e/image-with-text.spec.ts","./e2e/mode-toggle.spec.ts","./e2e/screenshot-align.spec.ts","./e2e/screenshot-alignment.spec.ts","./e2e/screenshot-debug.spec.ts","./e2e/screenshot-selection.spec.ts","./e2e/smoke.spec.ts","./e2e/text-image-alignment.spec.ts","./e2e/v4-alignment.spec.ts","./playwright.config.ts","./vitest.config.ts"],"version":"5.9.3"}
+\ No newline at end of file

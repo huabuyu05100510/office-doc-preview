@@ -15,7 +15,7 @@ function task(over: Partial<Task> = {}): Task {
 
 describe('TaskCard（原版 UI + 新数据）', () => {
   it('默认渲染文本徽章 + 文件名 + 状态 chip', () => {
-    render(<TaskCard task={task({ name: '郭亚平_前端.pdf' })} onPreview={() => {}} />)
+    render(<TaskCard task={task({ name: '郭亚平_前端.pdf' })} onPreview={() => {}} onCompare={() => {}} />)
     expect(screen.getByText('郭亚平_前端.pdf')).toBeTruthy()
     expect(screen.getAllByText('PDF').length).toBeGreaterThan(0)  // kind chip 和 icon 都有 PDF
     expect(screen.getByText('可预览')).toBeTruthy()
@@ -24,18 +24,25 @@ describe('TaskCard（原版 UI + 新数据）', () => {
 
   it('点击预览按钮触发回调', () => {
     const fn = vi.fn()
-    render(<TaskCard task={task()} onPreview={fn} />)
+    render(<TaskCard task={task()} onPreview={fn} onCompare={() => {}} />)
     fireEvent.click(screen.getByText('预览'))
     expect(fn).toHaveBeenCalledTimes(1)
   })
 
+  it('点击「对比」按钮触发 onCompare', () => {
+    const fn = vi.fn()
+    render(<TaskCard task={task()} onPreview={() => {}} onCompare={fn} />)
+    fireEvent.click(screen.getByText('对比'))
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
   it('转码未完成（convert_pdf）时预览按钮禁用', () => {
-    render(<TaskCard task={task({ strategy: 'convert_pdf', convertStatus: 'processing' })} onPreview={() => {}} />)
+    render(<TaskCard task={task({ strategy: 'convert_pdf', convertStatus: 'processing' })} onPreview={() => {}} onCompare={() => {}} />)
     expect(screen.getByText('预览').closest('button')?.disabled).toBe(true)
   })
 
   it('strategy=frontend 时按钮可用（原文件直读）', () => {
-    render(<TaskCard task={task({ strategy: 'frontend', convertStatus: 'processing' })} onPreview={() => {}} />)
+    render(<TaskCard task={task({ strategy: 'frontend', convertStatus: 'processing' })} onPreview={() => {}} onCompare={() => {}} />)
     expect(screen.getByText('预览').closest('button')?.disabled).toBe(false)
   })
 
@@ -43,7 +50,7 @@ describe('TaskCard（原版 UI + 新数据）', () => {
     render(<TaskCard task={task({
       convertStatus: 'failed',
       convertError: 'OnlyOfficeUnreachable: docker socket missing'
-    })} onPreview={() => {}} />)
+    })} onPreview={() => {}} onCompare={() => {}} />)
     expect(screen.getByText(/转码失败：OnlyOfficeUnreachable/)).toBeTruthy()
   })
 
@@ -51,6 +58,6 @@ describe('TaskCard（原版 UI + 新数据）', () => {
     expect(() => render(<TaskCard task={task({
       pages: [{ page: 1, url: '/p/1', width: 100, height: 100, bytes: 1000 }],
       thumbUrl: '/api/files/t1?as=thumb'
-    })} onPreview={() => {}} />)).not.toThrow()
+    })} onPreview={() => {}} onCompare={() => {}} />)).not.toThrow()
   })
 })
