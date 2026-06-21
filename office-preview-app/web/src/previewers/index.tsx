@@ -2,9 +2,10 @@ import { lazy, Suspense } from 'react'
 import type { Task } from '../types'
 import { previewKindOf } from '../types'
 
-// 按格式分包：PDF（pdf.js ~1MB）、DOCX（mammoth ~300KB）按需懒加载，
-// 不在首屏任务列表的初始 bundle 里 → FCP/LCP 更快。
+// 三种 PDF 渲染实现：pdf.js（兜底）/ 图片栅格化 / pdfium WASM（性能最佳）
 const PdfPreview = lazy(() => import('./PdfPreview').then(m => ({ default: m.PdfPreview })))
+const PdfImagesPreview = lazy(() => import('./PdfImagesPreview').then(m => ({ default: m.PdfImagesPreview })))
+const PdfPreviewWASM = lazy(() => import('./PdfPreviewWASM').then(m => ({ default: m.PdfPreviewWASM })))
 const DocxPreview = lazy(() => import('./DocxPreview').then(m => ({ default: m.DocxPreview })))
 const ImagePreview = lazy(() => import('./MediaPreview').then(m => ({ default: m.ImagePreview })))
 const VideoPreview = lazy(() => import('./MediaPreview').then(m => ({ default: m.VideoPreview })))
@@ -20,15 +21,53 @@ function Fallback() {
   )
 }
 
-interface Props { task: Task }
+export type PdfRenderMode = 'pdf' | 'images' | 'wasm'
 
-export function PreviewRouter({ task }: Props) {
+interface Props {
+  task: Task
+  /** 父级已解析的渲染模式：'pdf' | 'images' | 'wasm' */
+  mode?: PdfRenderMode
+}
+
+/**
+ * PDF 渲染决策：
+ *   - mode='images' 且 task.pages 存在  → 服务端栅格化图片（<img>，最快但不可选）
+ *   - mode='wasm'                       → pdfium WASM（性能最佳，支持线程；需要 crossOriginIsolated）
+ *   - 其他                              → pdf.js（默认，兼容性最好）
+ */
+function pdfRenderer(task: Task, mode: PdfRenderMode) {
+  const url = task.previewUrl || task.originalUrl
+  if (mode === 'images' && task.pages && task.pages.length > 0) {
+    return <PdfImagesPreview task={task} />
+  }
+  if (mode === 'wasm') {
+    return <PdfPreviewWASM url={url} docSize={task.previewSize || task.size} />
+  }
+  return <PdfPreview url={url} docSize={task.previewSize || task.size} task={task} />
+}
+
+/** auto 模式：根据是否有 pages 决定 images / pdf（wasm 必须显式选） */
+function resolveAutoMode(task: Task): PdfRenderMode {
+  if (task.pages && task.pages.length > 0) return 'images'
+  return 'pdf'
+}
+
+export function PreviewRouter({ task, mode }: Props) {
   const kind = previewKindOf(task)
   const url = task.previewUrl || task.originalUrl
+  const resolvedMode: PdfRenderMode = mode ?? resolveAutoMode(task)
+
+  // PDF 走三模式分发
+  if (kind === 'pdf' || kind === 'pdf-images') {
+    return (
+      <Suspense fallback={<Fallback />}>
+        {pdfRenderer(task, resolvedMode)}
+      </Suspense>
+    )
+  }
 
   return (
     <Suspense fallback={<Fallback />}>
-      {kind === 'pdf' && <PdfPreview url={url} docSize={task.previewSize || task.size} />}
       {kind === 'docx' && <DocxPreview url={url} />}
       {kind === 'image' && <ImagePreview url={url} />}
       {kind === 'video' && <VideoPreview url={url} />}

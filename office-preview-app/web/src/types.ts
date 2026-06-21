@@ -1,6 +1,30 @@
 // 与后端对齐的任务类型
-export type ConvertStatus = 'pending' | 'processing' | 'retrying' | 'done' | 'failed'
+export type ConvertStatus =
+  | 'pending'
+  | 'processing'
+  | 'retrying'
+  | 'rasterizing'   // 栅格化阶段
+  | 'done'
+  | 'failed'
 export type Strategy = 'frontend' | 'convert_pdf' | 'unsupported'
+
+export interface PageImage {
+  page: number
+  url: string                  // ?as=page&n=N → PNG
+  textUrl?: string             // ?as=text&n=N → 文字覆盖层 HTML（可选）
+  textWords?: number           // 该页文字数（性能面板）
+  width: number
+  height: number
+  bytes?: number
+}
+
+export type ConvertStage =
+  | 'convert'
+  | 'linearize'
+  | 'thumb'
+  | 'pages'
+  | 'textLayer'
+  | null
 
 export interface Task {
   id: string
@@ -19,15 +43,24 @@ export interface Task {
   convertEtaSec?: number
   convertElapsedSec?: number
   convertBytesPerSec?: number
+  convertRasterizeMs?: number
   previewSize?: number
+  // 双产物（PDF + 图片 + 文字层）
+  thumbUrl?: string | null
+  pages?: PageImage[]
+  pagesTotal?: number
+  pagesDone?: number
+  textDone?: number
+  convertStage?: ConvertStage
   status: string
   createdAt: number
   updatedAt: number
 }
 
-// 渲染分类（前端根据 ext + strategy 派发）
+// 渲染分类
 export type PreviewKind =
-  | 'pdf'         // pdf.js（包含原生 pdf + 转码后的 pdf）
+  | 'pdf'         // pdf.js
+  | 'pdf-images'  // 服务端栅格化图片 + 文字覆盖层（推荐）
   | 'docx'        // mammoth
   | 'image'
   | 'audio'
@@ -37,7 +70,10 @@ export type PreviewKind =
 
 export function previewKindOf(task: Task): PreviewKind {
   const ext = (task.previewExt || task.ext).toLowerCase()
-  if (ext === 'pdf') return 'pdf'
+  if (ext === 'pdf') {
+    if (task.pages && task.pages.length > 0) return 'pdf-images'
+    return 'pdf'
+  }
   if (ext === 'docx') return 'docx'
   if (['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'bmp', 'svg'].includes(ext)) return 'image'
   if (['mp3', 'wav', 'm4a', 'aac', 'pcm', 'amr'].includes(ext)) return 'audio'
@@ -72,4 +108,15 @@ export function fileIcon(ext: string): string {
   if (['mp4', 'mov', 'mkv', 'flv', 'webm'].includes(e)) return 'VID'
   if (['txt', 'md'].includes(e)) return 'TXT'
   return e.slice(0, 3).toUpperCase()
+}
+
+export function stageLabel(stage: ConvertStage): string {
+  switch (stage) {
+    case 'convert': return 'OnlyOffice 转换'
+    case 'linearize': return '线性化'
+    case 'thumb': return '缩略图'
+    case 'pages': return '栅格化'
+    case 'textLayer': return '文字层'
+    default: return ''
+  }
 }

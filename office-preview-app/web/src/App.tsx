@@ -14,7 +14,7 @@ export default function App() {
 
   // 有任务在转码时轮询（指数退避）
   useEffect(() => {
-    const busy = tasks.some(t => t.convertStatus === 'pending' || t.convertStatus === 'processing' || t.convertStatus === 'retrying')
+    const busy = tasks.some(t => t.convertStatus === 'pending' || t.convertStatus === 'processing' || t.convertStatus === 'retrying' || t.convertStatus === 'rasterizing')
     if (!busy) return
     let alive = true
     let delay = 1500

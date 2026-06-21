@@ -52,6 +52,9 @@ export function PerfPanel() {
             <Row k="已渲染页" v={m.renderedPages || '-'} />
             <Row k="单页耗时" v={ms(m.lastRenderMs)} />
             <Row k="滚动速度" v={m.scrollVel ? `${m.scrollVel} px/s` : '-'} />
+            {m.alignSamples > 0 && (
+              <Row k="选区对齐" v={`${m.alignErrorAvg} / ${m.alignErrorMax} px (n=${m.alignSamples})`} />
+            )}
           </div>
           <div className="perf-section">
             <div className="perf-label">运行</div>
