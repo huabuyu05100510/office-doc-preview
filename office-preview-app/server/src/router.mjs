@@ -331,13 +331,14 @@ async function handleRoute(req, res, url, pathname) {
       // 【自动重生】检测到旧版结构或非 PDFium 产物 → 用新代码按需重生
       // 1. 旧结构：含 <p style="position:absolute...display:flex"> 行容器
       // 2. 异常薄高：所有 span 高度都 < 5px（pdftotext 对长中文句的 bbox bug，旧代码无 16px 下限兜底）
-      // 3. 非 PDFium 产物：缺少 data-pdfium="1" 标记（兼容老任务从 poppler 路径迁过来）
+      // 3. 非 PDFium 产物：缺少 data-pdfium 标记（兼容老任务从 poppler 路径迁过来）
+      // 4. PDFium v1（data-pdfium="1"）：使用旧的 ASCENT_RATIO 近似公式，需升级到 v2 ink-bbox 直接定位
       let html = fs.readFileSync(safe, 'utf-8')
       const isOldFormat = /<p\s+style="[^"]*display:flex[^"]*align-items:\s*flex-end/i.test(html)
-      const isNotPdfium = !/data-pdfium="1"/.test(html)
+      const isNotPdfium4 = !/data-pdfium="4"/.test(html)  // v4+ 修正 PDFium render 像素尺寸公式（floor(floor(orig)*scale)）
       const heights = [...html.matchAll(/height:\s*([\d.]+)px/g)].map(m => parseFloat(m[1]))
       const hasThinWord = heights.length > 0 && heights.every(h => h < 5)
-      const reason = isOldFormat ? 'old flex <p>' : (isNotPdfium ? 'pre-pdfium' : (hasThinWord ? 'thin inkH' : null))
+      const reason = isOldFormat ? 'old flex <p>' : (isNotPdfium4 ? 'pre-pdfium-v4' : (hasThinWord ? 'thin inkH' : null))
       if (reason && task.previewPath && fs.existsSync(task.previewPath)) {
         try {
           const result = await extractTextLayer(task.previewPath, n, safe, { renderDpi: CONFIG.RASTERIZE_PAGE_DPI })

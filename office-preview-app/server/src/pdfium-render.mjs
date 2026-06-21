@@ -238,8 +238,15 @@ export async function pdfiumExtractCharBoxes(filePath, pageIdx, dpi = 120) {
     const mod = e.lib.module // 私有 module 通过 TS-ignore 安全访问
     const size = page.getOriginalSize()
     const scale = dpi / 72
-    const pageWidthPx = Math.floor(size.originalWidth * scale)
-    const pageHeightPx = Math.floor(size.originalHeight * scale)
+    // 关键：PDFium render 的实际像素尺寸 ≠ Math.round(orig * scale)。
+    // 实测：originalSize=595.3×841.95, scale=1.6667 → PDFium render 返回 991×1401
+    // 而 Math.round(595.3*1.6667)=992。偏差 1-2px 导致 span 坐标系与 PNG 像素空间不一致。
+    // PDFium 内部公式：floor(floor(orig) * scale)（先截断为整数点，再缩放取整）
+    // 用 effectiveScale = pageWidthPx / originalWidth 确保坐标 100% 落在 PNG 像素上
+    const pageWidthPx = Math.floor(Math.floor(size.originalWidth) * scale)
+    const pageHeightPx = Math.floor(Math.floor(size.originalHeight) * scale)
+    const scaleX = pageWidthPx / size.originalWidth
+    const scaleY = pageHeightPx / size.originalHeight
     const t0 = Date.now()
     const textPage = mod._FPDFText_LoadPage(page.pageIdx)
     if (!textPage) return { boxes: [], pageWidthPx, pageHeightPx, source: 'pdfium' }
@@ -260,14 +267,16 @@ export async function pdfiumExtractCharBoxes(filePath, pageIdx, dpi = 120) {
           const topPt    = mod.HEAPF64[tPtr >> 3]
           // PDF 坐标系：(leftPt, bottomPt, rightPt, topPt)，Y 向上
           // 屏幕坐标系：(leftPx, topPx, rightPx, bottomPx)，Y 向下
-          const left   = leftPt * scale
-          const right  = rightPt * scale
-          const top    = (size.originalHeight - topPt) * scale
-          const bottom = (size.originalHeight - bottomPt) * scale
+          // 用 effectiveScale (非 uniform) 确保坐标落在 PDFium 实际 render 的像素空间
+          const left   = leftPt * scaleX
+          const right  = rightPt * scaleX
+          const top    = (size.originalHeight - topPt) * scaleY
+          const bottom = (size.originalHeight - bottomPt) * scaleY
           const unicode = mod._FPDFText_GetUnicode(textPage, i)
           const char = unicode > 0 ? String.fromCodePoint(unicode) : ''
-          // 字体大小（PDFium WASM 函数 — run-level 分组必需）
-          const fontSize = mod._FPDFText_GetFontSize(textPage, i) || 12
+          // 字体大小（PDFium WASM 返回 PDF points，需缩放到屏幕像素以匹配 PNG 渲染）
+          const fontSizePt = mod._FPDFText_GetFontSize(textPage, i) || 12
+          const fontSize = fontSizePt * scaleY
           boxes.push({ char, left, top, right, bottom, unicode, fontSize, baselineY: bottom })
         }
       } finally {
@@ -305,6 +314,11 @@ export async function pdfiumExtractTextRuns(filePath, pageIdx, dpi = 120) {
   let cur = null
   for (const b of boxes) {
     if (!b.char) continue
+    // 过滤幽灵字符：fontSize 极小（< 3px）或不可见控制字符（换行、回车等）
+    // 这类字符来自 PDF 内嵌的控制码，选区无法命中，会形成 0.5×0.5 幽灵 span
+    if (b.fontSize < 3) continue
+    const cp = b.char.codePointAt(0)
+    if (cp !== undefined && (cp < 0x20 || (cp >= 0x7F && cp <= 0x9F))) continue
     // 纯空白字符（unicode === 32）作为字间距：附加到当前 run（white-space: pre 保留）
     const isSpace = b.char === ' '
     const sameFont = cur && Math.abs(b.fontSize - cur.fontSize) < 0.5

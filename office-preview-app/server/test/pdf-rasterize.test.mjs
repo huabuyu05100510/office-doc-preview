@@ -5,7 +5,7 @@
 //   extractTextLayer / extractAllTextLayers / fileSize
 // 关键不变式（PDFium 同引擎）：
 //   - 文字层 HTML 每字符一个 span，无 flex 行容器
-//   - 根 div 带 class="pdf-text-layer" data-pdfium="1" data-page-w/h
+//   - 根 div 带 class="pdf-text-layer" data-pdfium="4" data-page-w/h
 //   - rasterizeAllPages 输出 PNG 真实像素与 rasterizeDPI 数学一致
 //   - 不存在 PDF 不抛错（graceful fallback 返回 0 / 空 HTML）
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -40,7 +40,7 @@ describe('extractTextLayer — PDFium 路由', () => {
     expect(fs.existsSync(outPath)).toBe(true)
     const html = fs.readFileSync(outPath, 'utf-8')
     expect(html).toContain('class="pdf-text-layer"')
-    expect(html).toContain('data-pdfium="1"')
+    expect(html).toContain('data-pdfium="4"')
     expect(html).toMatch(/<span style="position:absolute/)
     expect(html).not.toMatch(/<p /) // 无 flex 行容器
   })
@@ -195,7 +195,7 @@ describe('真实中文 PDF 端到端（跳过无样本）', () => {
     expect(result.chars).toBeGreaterThan(10)
     const html = fs.readFileSync(outPath, 'utf-8')
     expect(/[一-鿿]/.test(html)).toBe(true)
-    expect(html).toContain('data-pdfium="1"')
+    expect(html).toContain('data-pdfium="4"')
     expect(html).not.toMatch(/<p /) // 无 flex 行容器
   }, 30_000)
 })

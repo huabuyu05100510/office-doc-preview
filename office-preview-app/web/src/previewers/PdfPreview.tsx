@@ -137,16 +137,50 @@ export function PdfPreview({ url, docSize = 0, task: _task }: Props) {
       if (s.renderedPages === 1) s.set({ tFirstPageMs: Math.round(performance.now() - s.tLoadStart) })
 
       // 文本层（可选中/可搜索）
+      // 定位逻辑参照 PDF.js TextLayer：
+      //   - tr[4]/tr[5] = 经 viewport transform 后的字符 origin（baseline）
+      //   - item.height * scale = viewport 像素高（= fontAscent + fontDescent 近似）
+      //   - item.width  * scale = PDF 规定的字符 advance 宽度
+      //   - scaleX = pdfWidth / browserWidth（补偿字体替换宽度漂移，PDF.js --scale-x 同款）
       try {
         const textContent = await page.getTextContent()
         if (token !== tokenRef.current) return
+        // 用于 scaleX 测量的 canvas（DOM-attached，lang 影响字体选择）
+        const measureCanvas = document.createElement('canvas')
+        measureCanvas.setAttribute('lang', document.documentElement.lang || 'zh')
+        const ctx = measureCanvas.getContext('2d')
         const frag = document.createDocumentFragment()
         for (const item of textContent.items as any[]) {
+          if (!item.str) continue
           const span = document.createElement('span')
           const tr = pdfjsLib.Util.transform(viewport.transform, item.transform)
+          const fontHeight = (item.height || 10) * scale
+          const pdfWidth = (item.width || 0) * scale
           span.style.left = `${tr[4]}px`
-          span.style.top = `${tr[5] - (item.height || 0) * scale}px`
-          span.style.fontSize = `${(item.height || 10) * scale}px`
+          span.style.top = `${tr[5] - fontHeight}px`
+          span.style.fontSize = `${fontHeight}px`
+          if (pdfWidth > 0) {
+            // v4.2 scaleX 对齐（pdf.js 行业标杆）：
+            //   不直接设 width=pdfWidth —— transform 会同时拉伸 box，导致双重放大。
+            //   正确：width = pdfWidth/sx，transform scaleX(sx) → 渲染宽度 = pdfWidth/sx × sx = pdfWidth。
+            //   ::selection 高亮跟随文字字形，拉伸后精确覆盖 canvas 文字区域。
+            if (ctx) {
+              ctx.font = `${fontHeight}px sans-serif`
+              const measured = ctx.measureText(item.str).width
+              if (measured > 0) {
+                const sx = pdfWidth / measured
+                span.style.width = `${pdfWidth / sx}px`
+                if (Math.abs(sx - 1) > 0.001) {
+                  span.style.transform = `scaleX(${sx.toFixed(4)})`
+                  span.style.transformOrigin = '0% 0%'
+                }
+              } else {
+                span.style.width = `${pdfWidth}px`
+              }
+            } else {
+              span.style.width = `${pdfWidth}px`
+            }
+          }
           span.textContent = item.str
           frag.appendChild(span)
         }

@@ -78,7 +78,7 @@ describe('buildRunBboxHtml（PDF.js 行业标杆 — run-level 渲染）', () =>
     ]
     const html = buildRunBboxHtml(runs, 612, 792)
     expect(html).toContain('class="pdf-text-layer"')
-    expect(html).toContain('data-pdfium="1"')
+    expect(html).toContain('data-pdfium="4"')
     expect((html.match(/<span /g) || []).length).toBe(1)  // 单 run = 单 span
     expect((html.match(/<p /g) || []).length).toBe(0)
     expect(html).toContain('>Page One</span>')
@@ -99,32 +99,37 @@ describe('buildRunBboxHtml（PDF.js 行业标杆 — run-level 渲染）', () =>
     expect(html).toContain('&lt;R&amp;D&gt;')
   })
 
-  it('【PDF.js 公式】top = baselineY - fontSize × 0.80（ASCENT_RATIO）', async () => {
+  it('【v4 ink-bbox】top = run.top 直接定位（不再用 ASCENT_RATIO 近似）', async () => {
     const { buildRunBboxHtml } = await import('../src/pdfium-text-layer.mjs')
-    // fontSize=20, baselineY=200 → top = 200 - 20×0.80 = 184
+    // v4: top 直接用 ink bbox 的 top（run.top），不再用 baselineY - fontSize×0.80
     const html = buildRunBboxHtml([
       { str: 'A', fontSize: 20, baselineY: 200, left: 0, right: 20, top: 180, bottom: 200 }
     ], 612, 792)
-    expect(html).toContain('top:184.00px')
+    expect(html).toContain('top:180.00px')
     expect(html).toContain('height:20.00px')
     expect(html).toContain('font-size:20.00px')
   })
 
-  it('【核心不变式】bullet ● 与汉字在同一行 baseline 对齐（不同 fontSize 触发新 run）', async () => {
+  it('【核心不变式】bullet ● 与汉字 span top 来自各自 ink bbox（v4 直接定位）', async () => {
     const { buildRunBboxHtml } = await import('../src/pdfium-text-layer.mjs')
     // bullet ● 在 12pt，文本在 14pt → 2 个 runs（不同 fontSize）
+    // v4: top = run.top（ink bbox 顶边），不再做 baselineY - fontSize×0.80 计算
     const runs = [
       { str: '●', fontSize: 12, baselineY: 100, left: 50, right: 60, top: 90, bottom: 100 },
-      { str: '郭亚平', fontSize: 14, baselineY: 100, left: 70, right: 130, top: 90, bottom: 100 }
+      { str: '郭亚平', fontSize: 14, baselineY: 100, left: 70, right: 130, top: 88, bottom: 100 }
     ]
     const html = buildRunBboxHtml(runs, 612, 792)
     const spans = html.match(/<span /g) || []
     expect(spans.length).toBe(2)
-    // bullet: top = 100 - 12*0.80 = 90.4
-    expect(html).toContain('top:90.40px')
-    // 汉字: top = 100 - 14*0.80 = 88.8
-    expect(html).toContain('top:88.80px')
-    // 两者 baseline 都是 100px → 视觉对齐（浏览器按各自 font-size 渲染，baseline 在 100）
+    // bullet: top = run.top = 90
+    expect(html).toContain('top:90.00px')
+    // 汉字: top = run.top = 88
+    expect(html).toContain('top:88.00px')
+    // v4: 最小高度 = max(inkH, fontSize×0.85)
+    // bullet height = max(10, 12*0.85=10.2) = 10.20
+    expect(html).toContain('height:10.20px')
+    // 汉字 height = max(12, 14*0.85=11.9) = 12.00
+    expect(html).toContain('height:12.00px')
   })
 
   it('同 fontSize + 相近 baselineY 的连续 chars 合并为 1 个 run', async () => {
@@ -296,7 +301,7 @@ describe('pdfiumExtractAllTextLayers', () => {
       expect(x.chars).toBeGreaterThanOrEqual(8)
       expect(fs.existsSync(x.file)).toBe(true)
       const html = fs.readFileSync(x.file, 'utf-8')
-      expect(html).toContain('data-pdfium="1"')
+      expect(html).toContain('data-pdfium="4"')
       expect(html).toContain('class="pdf-text-layer"')
       // 每 run 一个 span（不再是每字符）
       const spans = html.match(/<span /g) || []

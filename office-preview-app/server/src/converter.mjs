@@ -283,9 +283,9 @@ async function runConvert(task, srcPath) {
     convertStartAt: startAt, convertRetries: 0
   })
 
-  // ---------- 阶段 1：OnlyOffice 转换（带 1 次重试）----------
-  // OnlyOffice 修好后，删除 soffice 兜底（soffice 用 LibreOffice 自带字体库渲染 docx，转的效果差）
-  let pdfDownloadUrl
+  // ---------- 阶段 1：OnlyOffice 转换（带 1 次重试）→ soffice 兜底 ----------
+  let pdfDownloadUrl = null
+  let pdfPath = null  // soffice 直接产出本地路径时跳过阶段 2
   try {
     pdfDownloadUrl = await convertWithOnlyOffice(workFile, task)
   } catch (err) {
@@ -301,23 +301,31 @@ async function runConvert(task, srcPath) {
     try {
       pdfDownloadUrl = await convertWithOnlyOffice(workFile, task)
     } catch (err2) {
-      task.originalPath = originalOriginalPath
-      updateTask(task.id, { convertStatus: 'failed', convertStage: null, convertError: err2.message })
-      console.error(`[converter] ${task.name} unreachable after retry:`, err2.message)
-      return
+      // OnlyOffice 仍不可达 → soffice（LibreOffice headless）兜底
+      console.warn(`[converter] OnlyOffice unreachable, falling back to soffice: ${err2.message}`)
+      updateTask(task.id, { convertRetries: 2, convertStage: 'convert', convertError: `soffice fallback: ${err2.message}` })
+      try {
+        pdfPath = await convertWithSoffice(workFile, task)
+      } catch (sErr) {
+        task.originalPath = originalOriginalPath
+        updateTask(task.id, { convertStatus: 'failed', convertStage: null, convertError: sErr.message })
+        console.error(`[converter] ${task.name} soffice also failed:`, sErr.message)
+        return
+      }
     }
   }
   updateTask(task.id, { convertRetries: 0 })
 
-  // ---------- 阶段 2：下载 PDF ----------
-  const rawPdfPath = path.join(outDir, path.basename(workFile, path.extname(workFile)) + '.pdf')
-  let pdfPath
-  try {
-    pdfPath = await downloadPdf(pdfDownloadUrl, rawPdfPath)
-  } catch (err) {
-    task.originalPath = originalOriginalPath
-    updateTask(task.id, { convertStatus: 'failed', convertStage: null, convertError: err.message })
-    return
+  // ---------- 阶段 2：下载 PDF（soffice 已直接产出则跳过）----------
+  if (!pdfPath) {
+    const rawPdfPath = path.join(outDir, path.basename(workFile, path.extname(workFile)) + '.pdf')
+    try {
+      pdfPath = await downloadPdf(pdfDownloadUrl, rawPdfPath)
+    } catch (err) {
+      task.originalPath = originalOriginalPath
+      updateTask(task.id, { convertStatus: 'failed', convertStage: null, convertError: err.message })
+      return
+    }
   }
 
   // ---------- 阶段 3：线性化 ----------

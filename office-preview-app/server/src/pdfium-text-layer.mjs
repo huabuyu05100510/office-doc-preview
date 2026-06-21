@@ -1,25 +1,19 @@
 // PDFium 文字覆盖层（服务端 Node，run-level 渲染 — 对标 PDF.js 行业标杆）
-// 模型：Claude MiniMax-M3（MiniMax）
-// 关键变更（v3 修复垂直对齐）：
-//   - 从 char-level 改回 run-level（PDF.js #appendText() 算法）
-//   - 同一行 + 同字体大小的连续字符 = 1 个 <span>
-//   - 对齐公式：top = baselineY - fontSize × ASCENT_RATIO
-//   - 浏览器按 font-size + line-height:1 自动 baseline 对齐
-//   → bullet ● / hyphen - / CJK 汉字在同一行视觉基线完全一致
+// 模型：claude-sonnet-4-6
+// 关键变更（v4 像素级对齐）：
+//   - 直接使用 PDFium ink bbox 的 top/bottom 坐标定位 span
+//   - 不再使用 baselineY - ASCENT_RATIO * fontSize 近似公式
+//   - 同一引擎渲染 PNG 和提取 bbox → span 坐标 100% 对齐 ink 像素
+//   - 版本号 data-pdfium="3"，触发旧格式自动重生
 // CSS 约定（在 web/styles.css）：
 //   .pdf-text-layer span {
 //     line-height: 1; transform-origin: 0 0;
-//     white-space: pre;  /* 保留前导空格作缩进 */
-//     /* 不写 vertical-align —— 让浏览器按字体 metrics 自动对齐 */
+//     white-space: pre; overflow: hidden;
+//     transform: scaleX(N); /* 客户端 JS 补偿浏览器字体宽度差异 */
 //   }
 import fs from 'node:fs'
 import path from 'node:path'
 import { pdfiumExtractTextRuns, pdfiumGetPageCount } from './pdfium-render.mjs'
-
-// 视觉上沿占 font-size 的比例（与浏览器 ascender/descent 系数近似）
-// PDF.js 内部按 fontFamily 查表：CJK 约 0.88，Helvetica 约 0.73
-// 用 0.80 折中：CJK 行稍紧、Latin 行稍松，可视化差异 ≤ 2px
-const ASCENT_RATIO = 0.80
 
 function escapeHtml(s) {
   return String(s)
@@ -31,21 +25,30 @@ function escapeHtml(s) {
 }
 
 /**
- * 单个 text-run → <span>（PDF.js 风格）
- * 输入：{ str, fontSize, baselineY, left, right, top, bottom }
- * 定位公式（PDF.js #appendText）：
- *   top = baselineY - fontSize × ASCENT_RATIO
- *   height = fontSize            ← 让 CSS box 高度 = 字体大小
- *   font-size = fontSize px      ← 让浏览器按字体 metrics 渲染字符
- *   line-height: 1               ← 在 CSS（不在 inline style，避免选择时计算偏差）
+ * 单个 text-run → <span>（ink bbox 直接定位，像素级对齐）
+ * 输入：{ str, fontSize, left, right, top, bottom }
+ *
+ * 定位原则（v4 — 去除 ASCENT_RATIO 近似）：
+ *   top    = run.top            ← PDFium ink bbox 顶边，与 PNG ink 像素 100% 对齐
+ *   height = max(inkH, fontSize × 0.5)  ← ink 高度兜底，保证选区覆盖
+ *   width  = max(inkW, fontSize × 0.5)  ← ink 宽度兜底
+ *   font-size = fontSize        ← 用于客户端 scaleX 计算的参考值
+ *
+ * 客户端（PdfImagesPreview.tsx）会在注入后测量浏览器字体宽度并应用
+ *   transform: scaleX(pdfWidth / browserWidth)
+ * 使透明字符与 PNG ink 水平对齐，消除字体替换漂移。
  */
 function runToSpan(run) {
   const fontSize = Math.max(run.fontSize, 1)
-  const top = (run.baselineY - fontSize * ASCENT_RATIO).toFixed(2)
-  const height = fontSize.toFixed(2)
+  const inkW = run.right - run.left
+  const inkH = run.bottom - run.top
+  // v3: 最小高度从 fontSize×0.5 提升到 fontSize×0.85（确保细横笔如"一"也可点选）
+  // 最小宽度保留 fontSize×0.5（宽度偏差不影响命中，但高度决定可点击性）
+  const top = run.top.toFixed(2)
+  const height = Math.max(inkH, fontSize * 0.85).toFixed(2)
   const left = run.left.toFixed(2)
-  const width = Math.max(run.right - run.left, fontSize * 0.5).toFixed(2)  // 至少半个字符宽
-  return `<span style="position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${height}px">${escapeHtml(run.str)}</span>`
+  const width = Math.max(inkW, fontSize * 0.5).toFixed(2)
+  return `<span style="position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px;font-size:${fontSize.toFixed(2)}px">${escapeHtml(run.str)}</span>`
 }
 
 /**
@@ -55,10 +58,10 @@ function runToSpan(run) {
  */
 export function buildRunBboxHtml(runs, pageWidthPx, pageHeightPx) {
   if (!runs.length) {
-    return `<div class="pdf-text-layer" data-pdfium="1" data-page-w="${pageWidthPx.toFixed(2)}" data-page-h="${pageHeightPx.toFixed(2)}"></div>`
+    return `<div class="pdf-text-layer" data-pdfium="4" data-page-w="${pageWidthPx.toFixed(2)}" data-page-h="${pageHeightPx.toFixed(2)}"></div>`
   }
   const spans = runs.map(runToSpan)
-  return `<div class="pdf-text-layer" data-pdfium="1" data-page-w="${pageWidthPx.toFixed(2)}" data-page-h="${pageHeightPx.toFixed(2)}">${spans.join('')}</div>`
+  return `<div class="pdf-text-layer" data-pdfium="4" data-page-w="${pageWidthPx.toFixed(2)}" data-page-h="${pageHeightPx.toFixed(2)}">${spans.join('')}</div>`
 }
 
 /** 单页提取并写 HTML 文件（page 1-based） */

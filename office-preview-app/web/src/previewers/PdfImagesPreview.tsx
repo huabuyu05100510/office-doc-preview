@@ -1,18 +1,10 @@
 // 服务端栅格化图片预览 + 透明文字覆盖层（方案 B）
-// 设计：
-//   - <img> 作为底层（浏览器原生解码、零 JS 成本）
-//   - <div class="pdf-text-layer"> 用 dangerouslySetInnerHTML 注入服务端 bbox HTML，
-//     文字本身透明（color: transparent），但可选中、可复制、可搜索（user-select: text）
-//   - 文字层懒加载：图片进入视口后才 fetch text URL，避免阻塞首屏
-//   - 文字层根 div 带 data-page-w/h 属性 → 前端以此作为权威页尺寸兜底（兼容老 API 脏数据）
-//   - 每页 wrapper 严格按栅格化 PNG 像素尺寸布局，与文字层 bbox 坐标系 1:1 对齐
-//   - 保留 IntersectionObserver 虚拟滚动、buffer、计数
-//   - 关键修复（窄窗选区对齐）：
-//     1) img 不再用内联 style.width/height: 100% 强制，CSS class 统一管理
-//     2) styles.css 去掉 .pdf-images-page { max-width: 100% }，避免窄窗下 img 被压缩而 wrapper 不变
-//     3) 文字层加载完成后，抽样 5 个 span 与 PNG 实际 ink 像素位置做对比，上报对齐误差到 usePerf
-// 模型：Claude MiniMax-M3（MiniMax）
-import { useEffect, useRef, useState } from 'react'
+// 模型：claude-sonnet-4-6
+// 关键对齐技术（v4）：
+//   1. 服务端 span 坐标直接来自 PDFium ink bbox（与 PNG 同源，100% 像素对齐）
+//   2. span width = PNG ink width，fontSize = screen pixels → 无需客户端 scaleX 补偿
+//   3. overflow:hidden 防止浏览器字形溢出 ink bbox
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Task, PageImage } from '../types'
 import { usePerf } from '../perf'
 
@@ -38,6 +30,19 @@ function parseTextLayerDims(html: string): { pageW?: number; pageH?: number } {
   const m = html.match(/data-page-w="([\d.]+)"\s+data-page-h="([\d.]+)"/)
   if (!m) return {}
   return { pageW: parseFloat(m[1]), pageH: parseFloat(m[2]) }
+}
+
+/**
+ * 从服务端 text-layer HTML 中只提取 spans（innerHTML），去掉外层 .pdf-text-layer div。
+ * 防止双重 .pdf-text-layer 嵌套（React 外层 + 服务端内层），消除选区重影。
+ * 服务端格式：<div class="pdf-text-layer" data-pdfium="4" ...><span ...>...</span>...</div>
+ */
+function extractSpans(html: string): string {
+  // 取 <div ...> 和 </div> 之间的内容（spans）
+  const open = html.indexOf('>')
+  const close = html.lastIndexOf('</div>')
+  if (open < 0 || close < 0 || close <= open) return html
+  return html.slice(open + 1, close)
 }
 
 export function PdfImagesPreview({ task }: Props) {
@@ -142,6 +147,70 @@ export function PdfImagesPreview({ task }: Props) {
     return () => io.disconnect()
   }, [pages.length])
 
+  // v4.4: 纯净 pdf.js 文字层对齐方案。
+  // 正确做法（pdf.js 标准）：
+  //   1. 清除服务端 width:inkWidth（让 span 自然宽度 = 浏览器文字渲染宽度）
+  //   2. scaleX = inkWidth / 浏览器文字 box 宽度
+  //   3. transform-origin: 0 0（从左边缘拉伸）
+  //   4. 不设显式 width —— transform 后 box = 自然宽度 × sx = inkWidth
+  // hit area = inkWidth box = PNG 文字区域（点击准确），
+  // ::selection 高亮跟随拉伸后的字形 = 完整覆盖 PNG 文字（含收尾）。
+  //
+  // 关键：React dangerouslySetInnerHTML 在 textLayers 变化时重置 innerHTML，
+  //   会清掉 JS 设的 inline transform。所以 effect 不能 skip 已处理页——
+  //   每次 textLayers 变化都要重新应用。原始 inkWidth 缓存在 dataset.inkW。
+  const scaleAppliedPages = useRef<Set<number>>(new Set())
+  useLayoutEffect(() => {
+    if (!textLayers.size) return
+    const root = containerRef.current
+    if (!root) return
+    let cancelled = false
+    const apply = () => {
+      if (cancelled) return
+      for (const [pageNum] of textLayers) {
+        const pageEl = root.querySelector(`.pdf-image-page[data-page="${pageNum}"]`)
+        if (!pageEl) continue
+        const spans = pageEl.querySelectorAll('.pdf-text-layer span')
+        if (!spans.length) continue
+        for (const span of Array.from(spans)) {
+          const el = span as HTMLElement
+          const text = el.textContent || ''
+          if (text.length < 1) continue
+          // 原始 inkWidth：优先 inline width，否则读 dataset 缓存
+          // （React 重渲染清空了 inline width 时，dataset 仍保留）
+          let inkWidth = parseFloat(el.style.width)
+          if (!inkWidth || inkWidth < 2) {
+            const cached = el.dataset.inkW
+            if (cached) inkWidth = parseFloat(cached)
+          }
+          if (!inkWidth || inkWidth < 2) continue
+          el.dataset.inkW = String(inkWidth)
+          // 清除残留 transform + 服务端 width，让 box 回到 shrink-to-fit 自然宽度
+          el.style.transform = ''
+          el.style.transformOrigin = ''
+          el.style.width = ''
+          // 测量 box 宽度（transform 作用对象），box × sx = inkWidth 精确成立
+          let browserWidth = el.getBoundingClientRect().width
+          if (!browserWidth) browserWidth = el.scrollWidth || 0
+          if (browserWidth < 1) continue
+          const sx = inkWidth / browserWidth
+          if (Math.abs(sx - 1) > 0.001) {
+            el.style.transform = `scaleX(${sx.toFixed(4)})`
+            el.style.transformOrigin = '0% 0%'
+          }
+        }
+        scaleAppliedPages.current.add(pageNum)
+      }
+    }
+    // 等待字体加载完再测量（回退字体宽度 ≠ 最终字体，会导致 sx 偏差）
+    if (typeof document !== 'undefined' && (document as any).fonts?.ready) {
+      (document as any).fonts.ready.then(apply)
+    } else {
+      apply()
+    }
+    return () => { cancelled = true }
+  }, [textLayers])
+
   // 【PDFium 路径】文字层加载即完成对齐——服务端 bbox 中心 = PNG ink 中心
   // 旧版的双 effect（alignError 测量 + ink-box 覆盖）已删除：PDFium 同引擎保证 0 漂移
   // 保留 usePerf.alignError* 字段作为"健康检查探针"位（PDFium 路径下理论为 0）
@@ -216,12 +285,14 @@ export function PdfImagesPreview({ task }: Props) {
                 decoding="async"
                 style={{ display: 'block' }}
               />
-              {/* 文字覆盖层：透明但可选可复制。坐标系与 wrapper 像素 1:1 对齐 */}
+              {/* 文字覆盖层：透明但可选可复制。坐标系与 wrapper 像素 1:1 对齐。
+                  v4: 从服务端 HTML 中只提取 spans（innerHTML），不再嵌套整个 .pdf-text-layer div。
+                  消除双重 position:absolute + z-index 导致的选区重影。 */}
               {p.textUrl && textHtml && (
                 <div
                   className="pdf-text-layer"
                   data-page={p.page}
-                  dangerouslySetInnerHTML={{ __html: textHtml }}
+                  dangerouslySetInnerHTML={{ __html: extractSpans(textHtml) }}
                 />
               )}
             </div>
