@@ -7,7 +7,8 @@
 //   - 滚动联动：rAF 节流，programmatic flag 防回环
 //   - 顶栏：对齐命中数 / 置信度 / 算法版本（可观测）
 //   - 工具栏开关：批注 / 协作 / 质检
-import { Suspense, useEffect, useRef, useState } from 'react'
+//   - PDF 强制走「图片+文字」模式（沿用上一分支的 PDFium 像素级对齐 v4）
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Task } from '../types'
 import { fileIcon, humanSize } from '../types'
 import { PreviewRouter } from '../previewers'
@@ -34,6 +35,7 @@ function Fallback() {
 }
 
 export function CompareView({ src, tgt, onClose }: Props) {
+  // useAlignSync 内部已用 useRef，回的对象每次都新；用 useMemo 锁定 deps
   const align = useAlignSync({ srcTaskId: src.id, tgtTaskId: tgt.id })
   const srcWrapRef = useRef<HTMLDivElement>(null)
   const tgtWrapRef = useRef<HTMLDivElement>(null)
@@ -51,7 +53,15 @@ export function CompareView({ src, tgt, onClose }: Props) {
 
   // 标注 + 协作（房间 = src.id，源 + 译共享一个房间，多人同步）
   const anno = useAnnotations(src.id)
-  const collab = useCollab()
+  const collabInit = useCollab(s => s.init)
+  const collabClose = useCollab(s => s.close)
+  const collabIdentity = useCollab(s => s.identity)
+  const collabSendHighlight = useCollab(s => s.sendHighlight)
+  const collabSendAnnotate = useCollab(s => s.sendAnnotate)
+
+  // 强制 PDF 走「图片+文字」模式（v4 像素级对齐，可选中、不可缩放变形）
+  const srcMode = 'images' as const
+  const tgtMode = 'images' as const
 
   useEffect(() => { align.setSrcRoot(srcWrapRef.current) }, [align])
   useEffect(() => { align.setTgtRoot(tgtWrapRef.current) }, [align])
@@ -114,53 +124,69 @@ export function CompareView({ src, tgt, onClose }: Props) {
     apply(tgtWrapRef.current, 'tgt')
   }, [align.activeSegId, align.alignment])
 
-  // 协作：注入回调（远端标注 → 本地 reconcile；远端高亮 → 联动对端）
+  // 协作：注入回调（只跑一次；ref 模式不再触发 zustand state 变化）
+  const annoApplyRef = useRef(anno.applyRemote)
+  annoApplyRef.current = anno.applyRemote
   useEffect(() => {
-    collab.setHandlers({
-      onRemoteAnnotation: (ann, op) => anno.applyRemote(ann, op),
-      onRemoteHighlight: (segId) => { /* 由 CursorsLayer 渲染 */ }
+    useCollab.getState().setHandlers({
+      onRemoteAnnotation: (ann: any, op: string) => annoApplyRef.current(ann, op),
+      onRemoteHighlight: (segId: string) => { /* 由 CursorsLayer 渲染 */ }
     })
-  }, [collab, anno])
+  }, [])
 
   // 协作：开关切换 → 连接 / 断开
   useEffect(() => {
     if (collabOn) {
-      collab.init(src.id).catch(e => console.warn('[collab] init failed', e))
+      useCollab.getState().init(src.id).catch(e => console.warn('[collab] init failed', e))
     } else {
-      collab.close()
+      useCollab.getState().close()
     }
-    return () => { if (!collabOn) collab.close() }
+    return () => { useCollab.getState().close() }
   }, [collabOn, src.id])
 
   // hover 联动协作
-  const onSegEvent = (side: 'src' | 'tgt') => (e: React.MouseEvent) => {
+  const onSegEvent = useCallback((side: 'src' | 'tgt') => (e: React.MouseEvent) => {
     const target = (e.target as HTMLElement).closest('[data-seg-id]') as HTMLElement | null
     if (!target) return
     const segId = target.dataset.segId || ''
     align.highlight(segId)
-    if (collabOn) collab.sendHighlight(segId)
-  }
+    if (collabOn) collabSendHighlight(segId)
+  }, [align, collabOn, collabSendHighlight])
 
-  // 双击段 → 弹批注输入框（v1 用 prompt）
-  const onSegDblClick = (side: 'src' | 'tgt') => (e: React.MouseEvent) => {
+  // 双击段 → 弹批注输入框
+  const onSegDblClick = useCallback((side: 'src' | 'tgt') => (e: React.MouseEvent) => {
     if (!annoOn) return
     const target = (e.target as HTMLElement).closest('[data-seg-id]') as HTMLElement | null
     if (!target) return
     const segId = target.dataset.segId || ''
     const body = window.prompt('批注内容：')
     if (!body) return
-    const taskId = side === 'src' ? src.id : tgt.id
-    // 简化：所有批注挂在 src.id 房间
     anno.create({
       anchor: { type: 'segment', segId: `${side}:${segId}` },
       body,
-      userId: collab.identity?.userId || 'anon',
-      userName: collab.identity?.userName || '匿名',
-      color: collab.identity?.color || '#888'
+      userId: collabIdentity?.userId || 'anon',
+      userName: collabIdentity?.userName || '匿名',
+      color: collabIdentity?.color || '#888'
     }).then(a => {
-      if (collabOn) collab.sendAnnotate('create', a)
+      if (collabOn) collabSendAnnotate('create', a)
     }).catch(e => console.warn('[annotations] create failed', e))
-  }
+  }, [annoOn, anno, collabOn, collabIdentity, collabSendAnnotate])
+
+  const onResolve = useCallback((id: string) => {
+    anno.update(id, { status: 'resolved' }).then(a => { if (collabOn && a) collabSendAnnotate('update', a) })
+  }, [anno, collabOn, collabSendAnnotate])
+
+  const onDelete = useCallback((id: string) => {
+    anno.remove(id).then(() => { if (collabOn) collabSendAnnotate('delete', { id, taskId: src.id }) })
+  }, [anno, collabOn, collabSendAnnotate, src.id])
+
+  const onAnnoPick = useCallback((a: any) => {
+    const [side, segId] = (a.anchor.segId || '').split(':')
+    const root = side === 'src' ? srcWrapRef.current : tgtWrapRef.current
+    const el = root?.querySelector(`[data-seg-id="${segId}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    align.highlight(segId)
+  }, [align])
 
   return (
     <div className="modal-mask compare-mask" onMouseDown={onClose}>
@@ -203,28 +229,28 @@ export function CompareView({ src, tgt, onClose }: Props) {
         </header>
         <div className="compare-body" style={{ position: 'relative' }}>
           <div className="compare-pane" ref={srcWrapRef} onMouseOver={onSegEvent('src')} onDoubleClick={onSegDblClick('src')}>
-            <PaneHeader task={src} side="源" />
+            <PaneHeader task={src} side="源" mode={srcMode} />
             <Suspense fallback={<Fallback />}>
-              <PreviewRouter task={src} />
+              <PreviewRouter task={src} mode={srcMode} />
             </Suspense>
             {annoOn && <AnnotationLayer
               annotations={anno.annotations.filter(a => a.anchor.segId?.startsWith('src:'))}
               root={srcWrapRef.current}
-              onResolve={(id) => { anno.update(id, { status: 'resolved' }).then(a => collabOn && collab.sendAnnotate('update', a)) }}
-              onDelete={(id) => { anno.remove(id).then(() => collabOn && collab.sendAnnotate('delete', { id, taskId: src.id })) }}
+              onResolve={onResolve}
+              onDelete={onDelete}
             />}
             {collabOn && <CursorsLayer root={srcWrapRef.current} />}
           </div>
           <div className="compare-pane" ref={tgtWrapRef} onMouseOver={onSegEvent('tgt')} onDoubleClick={onSegDblClick('tgt')}>
-            <PaneHeader task={tgt} side="译" />
+            <PaneHeader task={tgt} side="译" mode={tgtMode} />
             <Suspense fallback={<Fallback />}>
-              <PreviewRouter task={tgt} />
+              <PreviewRouter task={tgt} mode={tgtMode} />
             </Suspense>
             {annoOn && <AnnotationLayer
               annotations={anno.annotations.filter(a => a.anchor.segId?.startsWith('tgt:'))}
               root={tgtWrapRef.current}
-              onResolve={(id) => { anno.update(id, { status: 'resolved' }).then(a => collabOn && collab.sendAnnotate('update', a)) }}
-              onDelete={(id) => { anno.remove(id).then(() => collabOn && collab.sendAnnotate('delete', { id, taskId: src.id })) }}
+              onResolve={onResolve}
+              onDelete={onDelete}
             />}
             {collabOn && <CursorsLayer root={tgtWrapRef.current} />}
           </div>
@@ -232,13 +258,7 @@ export function CompareView({ src, tgt, onClose }: Props) {
           {annoOn && (
             <AnnotationList
               annotations={anno.annotations}
-              onPick={(a) => {
-                const [side, segId] = (a.anchor.segId || '').split(':')
-                const root = side === 'src' ? srcWrapRef.current : tgtWrapRef.current
-                const el = root?.querySelector(`[data-seg-id="${segId}"]`)
-                el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                align.highlight(segId)
-              }}
+              onPick={onAnnoPick}
               onClose={() => setAnnoOn(false)}
             />
           )}
@@ -272,13 +292,14 @@ export function CompareView({ src, tgt, onClose }: Props) {
   )
 }
 
-function PaneHeader({ task, side }: { task: Task; side: string }) {
+function PaneHeader({ task, side, mode }: { task: Task; side: string; mode: string }) {
   return (
     <div className="compare-pane-header">
       <span className={`chip chip-side chip-${side === '源' ? 'src' : 'tgt'}`}>{side}</span>
       <span className="card-icon icon-pdf">{fileIcon(task.ext)}</span>
       <span className="compare-pane-name" title={task.name}>{task.name}</span>
       <span className="chip">{humanSize(task.size)}</span>
+      <span className="chip chip-mode" title="强制使用 PDFium 像素对齐的栅格化图片+文字层">渲染：图片+文字</span>
     </div>
   )
 }

@@ -27,10 +27,6 @@ interface CollabState {
   cursors: Record<string, CollabCursor>
   // 远端高亮（hover）
   highlight: Record<string, CollabCursor>
-  // 标注远端事件回调（外部注入）
-  onRemoteAnnotation: ((ann: any, op: string) => void) | null
-  onRemoteHighlight: ((segId: string, color: string) => void) | null
-  onRemoteScroll: ((segId: string, color: string) => void) | null
 
   init: (taskId: string) => Promise<void>
   close: () => void
@@ -38,7 +34,22 @@ interface CollabState {
   sendCursor: (segId: string) => void
   sendHighlight: (segId: string) => void
   sendScroll: (segId: string) => void
-  setHandlers: (h: Partial<Pick<CollabState, 'onRemoteAnnotation' | 'onRemoteHighlight' | 'onRemoteScroll'>>) => void
+  // 远端事件回调（用 ref，不进 store state，避免触发重渲染）
+  setHandlers: (h: Partial<RemoteHandlers>) => void
+  getHandlers: () => RemoteHandlers
+}
+
+interface RemoteHandlers {
+  onRemoteAnnotation: ((ann: any, op: string) => void) | null
+  onRemoteHighlight: ((segId: string, color: string) => void) | null
+  onRemoteScroll: ((segId: string, color: string) => void) | null
+}
+
+// 进程内 ref：避免 zustand state 变更引发 CompareView 重渲染
+const handlersRef: RemoteHandlers = {
+  onRemoteAnnotation: null,
+  onRemoteHighlight: null,
+  onRemoteScroll: null
 }
 
 const LS_KEY = 'collabIdentity'
@@ -81,9 +92,6 @@ export const useCollab = create<CollabState>((set, get) => ({
   online: false,
   cursors: {},
   highlight: {},
-  onRemoteAnnotation: null,
-  onRemoteHighlight: null,
-  onRemoteScroll: null,
 
   async init(taskId) {
     // 已连同一 task 跳过
@@ -122,7 +130,7 @@ export const useCollab = create<CollabState>((set, get) => ({
           usePerf.getState().set({ collabOnline: (msg.users || []).length })
           break
         case 'annotate':
-          state.onRemoteAnnotation?.(msg.annotation, msg.op)
+          handlersRef.onRemoteAnnotation?.(msg.annotation, msg.op)
           break
         case 'cursor':
           set({ cursors: { ...state.cursors, [msg.userId]: { userId: msg.userId, segId: msg.segId, color: msg.color } } })
@@ -130,7 +138,7 @@ export const useCollab = create<CollabState>((set, get) => ({
         case 'highlight':
           // hover 是瞬时态，2s 后过期
           set({ highlight: { ...state.highlight, [msg.userId]: { userId: msg.userId, segId: msg.segId, color: msg.color } } })
-          state.onRemoteHighlight?.(msg.segId, msg.color)
+          handlersRef.onRemoteHighlight?.(msg.segId, msg.color)
           setTimeout(() => {
             const cur = get().highlight
             if (cur[msg.userId]?.segId === msg.segId) {
@@ -140,7 +148,7 @@ export const useCollab = create<CollabState>((set, get) => ({
           }, 2000)
           break
         case 'scroll':
-          state.onRemoteScroll?.(msg.segId, msg.color)
+          handlersRef.onRemoteScroll?.(msg.segId, msg.color)
           break
       }
     }
@@ -167,6 +175,12 @@ export const useCollab = create<CollabState>((set, get) => ({
   },
 
   setHandlers(h) {
-    set(h as any)
+    if (h.onRemoteAnnotation !== undefined) handlersRef.onRemoteAnnotation = h.onRemoteAnnotation
+    if (h.onRemoteHighlight !== undefined) handlersRef.onRemoteHighlight = h.onRemoteHighlight
+    if (h.onRemoteScroll !== undefined) handlersRef.onRemoteScroll = h.onRemoteScroll
+  },
+
+  getHandlers() {
+    return handlersRef
   }
 }))
