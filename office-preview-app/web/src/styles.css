@@ -1,3 +1,7 @@
+/* 模型：claude-sonnet-4-6 */
+/* Phase 0.A: import primitive token palette (Radix-style 12-step scale) */
+@import './design/primitives.css';
+
 /* ============ 基础重置与设计 token ============ */
 :root {
   --bg: #f5f7fa;
@@ -4038,3 +4042,6 @@ textarea.oa-input {
   border-bottom-color: #1677ff;
   font-weight: 500;
 }
+
+/* === Phase 0 Foundation: primitive tokens imported above === */
+/* Next: Phase 1.A will consolidate 3 conflicting :root blocks into single semantic layer */

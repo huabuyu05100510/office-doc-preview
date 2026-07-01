@@ -86,6 +86,8 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('@hyzyla/pdfium')) return 'pdfium-wasm'
           if (id.includes('pdfjs-dist')) return 'pdfjs'
+          if (id.includes('node_modules/motion') || id.includes('node_modules\\motion')) return 'motion'
+          if (id.includes('framer-motion')) return 'motion'
           return undefined
         }
       }

@@ -216,3 +216,12 @@ export const STATUS_COLORS: Record<string, { bg: string; fg: string; border?: st
   queued:  { bg: '#f0f1f3', fg: '#4e5969', border: '#e5e7eb' },
   converting: { bg: '#e6f4ff', fg: '#1677ff', border: '#91caff' },
 }
+
+// 模型：claude-sonnet-4-6
+// (existing COLORS / FONT_SIZES / etc. above remain unchanged for Phase 0)
+// Below: thin re-export from primitives to make them available to TS consumers
+// Phase 0: primitives layer added; Phase 1.A will deprecate COLORS hex values
+//          and migrate all consumers to PRIMITIVES['blue'][6] / primitivesToCSSVars()
+
+export { PRIMITIVES, primitivesToCSSVars, SCALE_NAMES } from './primitives'
+export type { ScaleName } from './primitives'

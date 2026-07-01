@@ -1,10 +1,12 @@
 // SideMenu — 左侧导航（4 大模块分组：大厂风格）
 // 模型：claude-sonnet-4-6
 import React from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   FileTextIcon, LanguagesIcon, ShieldCheckIcon, ScanIcon,
   ChevronRightIcon, SparkleIcon, FolderIcon, ImageIcon, BookmarkIcon, MicIcon, LayersIcon, UploadIcon,
 } from '../design/icons'
+import { menuKeyToRoute } from '../routes'
 
 export type MenuKey = 'files' | 'translate' | 'qc' | 'ocr' | 'voice' | 'convert' | 'upload'
 
@@ -52,13 +54,23 @@ const GROUPS: MenuGroup[] = [
 
 export interface SideMenuProps {
   active: MenuKey
-  onChange: (key: MenuKey) => void
+  /** Optional: when provided, called instead of internal useNavigate. Useful for testing. */
+  onChange?: (key: MenuKey) => void
 }
 
 // 4 大模块 + 工具集占位项
 const ACTIVE_KEYS: ReadonlySet<MenuKey> = new Set(['files', 'translate', 'qc', 'ocr', 'convert', 'upload', 'voice'])
 
 export const SideMenu: React.FC<SideMenuProps> = ({ active, onChange }) => {
+  const navigate = useNavigate()
+  const handleChange = (key: string) => {
+    if (!ACTIVE_KEYS.has(key as MenuKey)) return
+    if (onChange) {
+      onChange(key as MenuKey)
+    } else {
+      navigate(menuKeyToRoute(key as MenuKey))
+    }
+  }
   return (
     <aside className="oa-sidemenu" aria-label="主导航">
       {GROUPS.map(group => (
@@ -72,12 +84,7 @@ export const SideMenu: React.FC<SideMenuProps> = ({ active, onChange }) => {
                 key={item.key}
                 type="button"
                 className={`oa-sidemenu-item ${isActive ? 'active' : ''}`}
-                onClick={() => {
-                  // 仅 4 个主菜单可切换；其他工具项为占位
-                  if (ACTIVE_KEYS.has(item.key as MenuKey)) {
-                    onChange(item.key as MenuKey)
-                  }
-                }}
+                onClick={() => handleChange(item.key)}
                 aria-current={isActive ? 'page' : undefined}
               >
                 <span className="oa-sidemenu-item-icon">

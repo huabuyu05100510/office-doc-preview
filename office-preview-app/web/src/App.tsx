@@ -1,6 +1,7 @@
 // Office AI — v5.0 重构（大厂视觉 + 三栏布局 + 真实 AI 集成）
 // 模型：claude-sonnet-4-6
 import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AppShell } from './AppShell'
 import { AppLayoutV2, AppLayoutV2Props } from './AppLayoutV2'
 import { FilesPage } from './pages/FilesPage'
@@ -13,6 +14,8 @@ import { UploadCenterPage } from './pages/UploadCenterPage'
 import { useStore } from './store'
 import { RightTaskItem } from './components/RightPanel'
 import { AlertCircleIcon } from './design/icons'
+import { AppRouter } from './router/AppRouter'
+import { routeToMenuKey, menuKeyToRoute, MenuKey } from './routes'
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
 
@@ -48,7 +51,12 @@ const MENU_LABELS: Record<AppLayoutV2Props['active'], string> = {
 }
 
 export default function App() {
-  const [active, setActive] = useState<AppLayoutV2Props['active']>('files')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const active = routeToMenuKey(location.pathname) as AppLayoutV2Props['active']
+  const onMenuChange = (key: AppLayoutV2Props['active']) => {
+    navigate(menuKeyToRoute(key as MenuKey))
+  }
   const [health, setHealth] = useState<HealthAll | null>(null)
   const tasks = useStore(s => s.tasks)
 
@@ -70,10 +78,11 @@ export default function App() {
 
   return (
     <AppShell>
-      <AppLayoutV2
-        active={active}
-        onMenuChange={setActive}
-        activeLabel={MENU_LABELS[active]}
+      <AppRouter>
+        <AppLayoutV2
+          active={active}
+          onMenuChange={onMenuChange}
+          activeLabel={MENU_LABELS[active]}
         health={health ? {
           status: health.status,
           reason: health.translate.providers.length === 0 ? '翻译降级到 mock 模式' : null,
@@ -107,6 +116,7 @@ export default function App() {
         {active === 'convert' && <FormatConvertPage />}
         {active === 'upload' && <UploadCenterPage />}
       </AppLayoutV2>
+      </AppRouter>
     </AppShell>
   )
 }

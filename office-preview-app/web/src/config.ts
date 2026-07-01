@@ -63,3 +63,11 @@ export function setFeature(key: keyof Features, value: boolean) {
     // 需要刷新页面生效 (重新加载 config)
   } catch { /* ignore */ }
 }
+
+// 模型：claude-sonnet-4-6
+// Motion feature flag — opt-in via URL or localStorage
+// Phase 0: defaults to false (production-safe)
+// Phase 1+: flip default to true after primitives are stable
+export const MOTION_DEFAULT = false
+
+export const MOTION_CHUNK_BUDGET_KB = 60  // gzipped; build will warn if exceeded
