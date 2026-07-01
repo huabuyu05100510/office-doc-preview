@@ -41,7 +41,18 @@ function pdfRenderer(task: Task, mode: PdfRenderMode) {
     return <PdfImagesPreview task={task} />
   }
   if (mode === 'wasm') {
-    return <PdfPreviewWASM url={url} docSize={task.previewSize || task.size} />
+    // 上传文件场景：从 task.pages 构造 serverTextUrlTemplate
+    const firstPage = task.pages?.[0]
+    const serverTextUrlTemplate = firstPage?.textUrl
+      ? firstPage.textUrl.replace(/n=\d+/, 'n=N')
+      : undefined
+    return (
+      <PdfPreviewWASM
+        url={url}
+        docSize={task.previewSize || task.size}
+        serverTextUrlTemplate={serverTextUrlTemplate}
+      />
+    )
   }
   return <PdfPreview url={url} docSize={task.previewSize || task.size} task={task} />
 }

@@ -1,6 +1,19 @@
 // 入口：启动 HTTP 服务 + 首次扫描样本
 import http from 'node:http'
 import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import dotenv from 'dotenv'
+
+// 加载 server/.env（AI key 等敏感配置不进 git）
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const envPath = path.resolve(__dirname, '..', '.env')
+if (fs.existsSync(envPath)) {
+  dotenv.config({ path: envPath })
+  console.log(`[env] loaded ${envPath}`)
+}
+
 import { CONFIG } from './config.mjs'
 import { route } from './router.mjs'
 import { scanSamples } from './router.mjs'
@@ -14,6 +27,8 @@ function ensureDirs() {
 }
 
 const server = http.createServer((req, res) => {
+  // 全局 CORP 头：允许跨域加载（Vite dev 的 COEP require-corp 需要）
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
   route(req, res).catch(err => {
     console.error('[server] unhandled', err)
     if (!res.headersSent) {

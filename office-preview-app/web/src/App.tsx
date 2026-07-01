@@ -1,103 +1,112 @@
-import { useEffect, useMemo, useState } from 'react'
+// Office AI — v5.0 重构（大厂视觉 + 三栏布局 + 真实 AI 集成）
+// 模型：claude-sonnet-4-6
+import { useEffect, useState } from 'react'
+import { AppShell } from './AppShell'
+import { AppLayoutV2, AppLayoutV2Props } from './AppLayoutV2'
+import { FilesPage } from './pages/FilesPage'
+import { TranslationPage } from './pages/TranslationPage'
+import { QualityCheckPage } from './pages/QualityCheckPage'
+import { OCRPage } from './pages/OCRPage'
+import { VoicePage } from './pages/VoicePage'
+import { FormatConvertPage } from './pages/FormatConvertPage'
+import { UploadCenterPage } from './pages/UploadCenterPage'
 import { useStore } from './store'
-import { UploadDrop } from './components/UploadDrop'
-import { TaskCard } from './components/TaskCard'
-import { PreviewModal } from './components/PreviewModal'
-import type { Task } from './types'
+import { RightTaskItem } from './components/RightPanel'
+import { AlertCircleIcon } from './design/icons'
+
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+
+interface HealthAll {
+  ok: boolean
+  status: 'ok' | 'degraded'
+  version: string
+  pdfium: { ok: boolean; engine: string; available: boolean }
+  translate: { ok: boolean; providers: string[]; active: string }
+  ocr: { ok: boolean; providers: string[]; active: string }
+  qc: { ok: boolean; active: string }
+}
+
+async function fetchHealth(): Promise<HealthAll | null> {
+  try {
+    const r = await fetch(`${API_BASE}/api/health/all`, { cache: 'no-store' })
+    if (!r.ok) return null
+    return await r.json()
+  } catch (e) {
+    console.warn('[health] fetch failed:', e)
+    return null
+  }
+}
+
+const MENU_LABELS: Record<AppLayoutV2Props['active'], string> = {
+  files: '文档预览',
+  translate: '智能翻译',
+  qc: '智检校对',
+  ocr: 'OCR 识别',
+  convert: '格式转换',
+  upload: '上传中心',
+  voice: '语音中心',
+}
 
 export default function App() {
-  const { tasks, loading, selected, fetchTasks, select, refreshIfNeeded } = useStore()
-  const [query, setQuery] = useState('')
-  const [tab, setTab] = useState<'all' | 'office' | 'media' | 'text'>('all')
+  const [active, setActive] = useState<AppLayoutV2Props['active']>('files')
+  const [health, setHealth] = useState<HealthAll | null>(null)
+  const tasks = useStore(s => s.tasks)
 
-  useEffect(() => { fetchTasks() }, [fetchTasks])
-
-  // 有任务在转码时轮询（指数退避）
+  // 启动 + 30s 健康轮询
   useEffect(() => {
-    const busy = tasks.some(t => t.convertStatus === 'pending' || t.convertStatus === 'processing' || t.convertStatus === 'retrying' || t.convertStatus === 'rasterizing')
-    if (!busy) return
-    let alive = true
-    let delay = 1500
-    const tick = async () => {
-      if (!alive) return
-      await refreshIfNeeded()
-      delay = Math.min(delay * 1.3, 4000)
-      timer = setTimeout(tick, delay)
-    }
-    let timer = setTimeout(tick, delay)
-    return () => { alive = false; clearTimeout(timer) }
-  }, [tasks, refreshIfNeeded])
+    fetchHealth().then(setHealth)
+    const t = setInterval(() => fetchHealth().then(setHealth), 30_000)
+    return () => clearInterval(t)
+  }, [])
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return tasks.filter(t => {
-      if (tab === 'office' && !['docx', 'pptx', 'xlsx', 'doc', 'ppt', 'xls', 'pdf'].includes(t.ext)) return false
-      if (tab === 'media' && !['mp3', 'wav', 'm4a', 'aac', 'mp4', 'mov', 'mkv', 'flv', 'webm', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'].includes(t.ext)) return false
-      if (tab === 'text' && !['txt', 'md'].includes(t.ext)) return false
-      if (q && !t.name.toLowerCase().includes(q)) return false
-      return true
-    })
-  }, [tasks, query, tab])
+  const taskItems: RightTaskItem[] = tasks.slice(0, 20).map(t => ({
+    id: t.id,
+    name: t.name,
+    status: t.status,
+    createdAt: t.createdAt,
+  }))
 
-  const download = (t: Task) => {
-    const a = document.createElement('a')
-    a.href = t.originalUrl
-    a.download = t.name
-    a.click()
-  }
+  const activeTaskId = tasks[0]?.id
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="brand">
-          <span className="brand-logo">📄</span>
-          <div>
-            <div className="brand-title">Office 文档智能预览</div>
-            <div className="brand-sub">智能解析 · 高保真还原 · 极致性能</div>
-          </div>
-        </div>
-        <div className="tabs">
-          {([['all', '全部'], ['office', '文档'], ['media', '媒体'], ['text', '文本']] as const).map(([k, label]) => (
-            <button key={k} className={`tab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)}>{label}</button>
-          ))}
-        </div>
-      </header>
-
-      <main className="app-main">
-        <UploadDrop />
-
-        <div className="list-toolbar">
-          <input
-            className="search"
-            placeholder="搜索文件名…"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-          />
-          <span className="list-count">{filtered.length} 个文件</span>
-        </div>
-
-        {loading && !tasks.length ? (
-          <div className="grid">
-            {Array.from({ length: 6 }).map((_, i) => <div key={i} className="card skeleton" />)}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="empty">
-            <div className="empty-emoji">📭</div>
-            <div>暂无文件</div>
-            <div className="hint">拖拽文件到上方，或等待后端扫描预置样本</div>
-          </div>
-        ) : (
-          <div className="grid">
-            {filtered.map(t => (
-              <TaskCard key={t.id} task={t} onPreview={select} />
-            ))}
+    <AppShell>
+      <AppLayoutV2
+        active={active}
+        onMenuChange={setActive}
+        activeLabel={MENU_LABELS[active]}
+        health={health ? {
+          status: health.status,
+          reason: health.translate.providers.length === 0 ? '翻译降级到 mock 模式' : null,
+          pdfium: health.pdfium,
+          translate: health.translate,
+          ocr: health.ocr,
+        } : undefined}
+        tasks={taskItems}
+        selectedTaskId={activeTaskId}
+        onSelectTask={() => {/* 未来：切换预览任务 */}}
+        showRightPanel={active === 'files' || active === 'translate'}
+        fullWidth={active === 'qc' || active === 'ocr' || active === 'convert' || active === 'upload' || active === 'voice'}
+      >
+        {/* 降级模式 banner */}
+        {health && health.status === 'degraded' && (
+          <div className="oa-alert oa-alert-warning" style={{ marginBottom: 24 }}>
+            <AlertCircleIcon size={16} />
+            <div>
+              <strong>AI 服务降级模式</strong> — 当前无可用 AI Provider Key，
+              翻译/OCR/智检将使用本地启发式（fallback）结果。
+              请在服务端配置 <code>MINIMAX_API_KEY</code> / <code>ZHIPU_API_KEY</code> 后重启。
+            </div>
           </div>
         )}
-      </main>
 
-      {selected && (
-        <PreviewModal task={selected} onClose={() => select(null)} onDownload={download} />
-      )}
-    </div>
+        {active === 'files' && <FilesPage />}
+        {active === 'translate' && <TranslationPage />}
+        {active === 'qc' && <QualityCheckPage />}
+        {active === 'ocr' && <OCRPage />}
+        {active === 'voice' && <VoicePage />}
+        {active === 'convert' && <FormatConvertPage />}
+        {active === 'upload' && <UploadCenterPage />}
+      </AppLayoutV2>
+    </AppShell>
   )
 }

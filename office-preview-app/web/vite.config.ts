@@ -66,7 +66,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://localhost:5180', changeOrigin: true }
     },
-    // 关键：开发模式下不放任何 COOP/COEP，避免 Vite HMR / WebSocket 跨域问题。
+    // 关键：开发模式下不放 COOP/COEP，避免 Vite HMR / WebSocket 跨域问题。
     // WASM 模式需要的 crossOriginIsolated 由 PreviewModal 给出提示，
     // 生产环境需要时再通过部署层单独设置跨源隔离头。
     headers: {}

@@ -51,17 +51,18 @@ afterAll(async () => {
 })
 
 // ============ helpers ============
-async function httpReq(method, urlPath, headers = {}) {
+async function httpReq(method, urlPath, headers = {}, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(urlPath, baseUrl)
     const req = http.request({
       method, hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers
     }, (res) => {
-      let body = ''
-      res.on('data', c => body += c)
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }))
+      let buf = ''
+      res.on('data', c => buf += c)
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: buf }))
     })
     req.on('error', reject)
+    if (body !== undefined) req.write(body)
     req.end()
   })
 }
@@ -252,5 +253,155 @@ describe('GET /api/render-engine', () => {
     expect(typeof body.engine).toBe('string')
     // 引擎字符串含版本或 fallback 标识
     expect(body.engine).toMatch(/pdfium-wasm|fallback-poppler/)
+  })
+})
+
+// ============ v4.0：strategy 透传（passthrough | synthetic）============
+// 模型：claude-sonnet-4-6
+describe('POST /api/inspect/translate — strategy 透传', () => {
+  function postTranslate(body) {
+    return httpReq('POST', '/api/inspect/translate',
+      { 'Content-Type': 'application/json' },
+      JSON.stringify(body))
+  }
+
+  it('1. DOCX 任务 + strategy="passthrough" → 200 + identity pages + 响应头 X-Translate-Strategy=passthrough', async () => {
+    // 构造 DOCX-like 任务：ext=docx + pages 数组
+    const task = makeTask('rt-tr-pt-1', null, {
+      pagesDir: path.join(CONFIG.DERIVED_DIR, 'rt-tr-pt-1', 'pages'),
+      pages: [1, 2],
+    })
+    // makeTask 默认 ext='pdf'，改为 docx
+    task.ext = 'docx'
+    task.previewExt = 'docx'
+    upsertTask(task)
+
+    const r = await postTranslate({
+      taskId: task.id, sourceLang: 'zh-CN', targetLang: 'en', strategy: 'passthrough',
+    })
+    expect(r.status).toBe(200)
+    expect(r.headers['x-translate-strategy']).toBe('passthrough')
+    expect(r.headers['x-translate-engine']).toBe('identity-mock-v1')
+    const body = JSON.parse(r.body)
+    // identity：pages 来自 task.pages
+    expect(body.pages.length).toBe(2)
+    expect(body.pages[0].sourceText).toBe(body.pages[0].targetText)  // identity
+  })
+
+  it('2. txt 任务 + 不传 strategy → 走 synthetic 旧管线 + 响应头 X-Translate-Strategy=synthetic', async () => {
+    // 构造 txt 任务：原文件 = 短文
+    const txtPath = path.join(CONFIG.UPLOAD_DIR, 'rt-tr-synth-1.txt')
+    fs.writeFileSync(txtPath, '你好世界\n这是测试。', 'utf-8')
+    const task = makeTask('rt-tr-synth-1', null, {})
+    task.ext = 'txt'
+    task.previewExt = 'txt'
+    task.originalPath = txtPath
+    upsertTask(task)
+
+    const r = await postTranslate({
+      taskId: task.id, sourceLang: 'zh-CN', targetLang: 'en',
+    })
+    expect(r.status).toBe(200)
+    expect(r.headers['x-translate-strategy']).toBe('synthetic')
+    expect(r.headers['x-translate-engine']).toBe('mock-v1')
+    const body = JSON.parse(r.body)
+    // synthetic：走 paginateText，pages 来源于 mock 切分
+    expect(body.pages.length).toBeGreaterThan(0)
+  })
+
+  it('3. POST translate + strategy 非法值 → 400', async () => {
+    const r = await postTranslate({
+      taskId: 'rt-tr-bad-1', sourceLang: 'zh-CN', targetLang: 'en', strategy: 'invalid',
+    })
+    expect(r.status).toBe(400)
+    expect(JSON.parse(r.body).error).toMatch(/strategy/)
+  })
+
+  it('4. GET translate/render-image + strategy=passthrough → 200 + image/png + 响应头 X-Translate-Strategy=passthrough', async () => {
+    const task = makeTask('rt-tr-img-pt-1', null, {
+      pagesDir: path.join(CONFIG.DERIVED_DIR, 'rt-tr-img-pt-1', 'pages'),
+      pages: [1],
+    })
+    task.ext = 'docx'
+    task.previewExt = 'docx'
+    upsertTask(task)
+
+    const r = await httpReq('GET', `/api/inspect/translate/render-image?taskId=${task.id}&page=1&targetLang=en&strategy=passthrough`)
+    expect(r.status).toBe(200)
+    expect(r.headers['content-type']).toBe('image/png')
+    expect(r.headers['x-translate-strategy']).toBe('passthrough')
+    // passthrough 模式：imagePath 直接 = 源 page.png（无 soffice 二次转换）
+    // body 至少非空（makeTask 用 33-byte placeholder PNG）
+    expect(r.body.length).toBeGreaterThan(0)
+  })
+})
+
+describe('POST /api/inspect/diff（智检 diff）', () => {
+  function postDiff(left, right) {
+    return httpReq('POST', '/api/inspect/diff',
+      { 'Content-Type': 'application/json' },
+      JSON.stringify({ left, right }))
+  }
+
+  it('返回 200 + diff ops + errors + hunks + tokens', async () => {
+    const r = await postDiff('既往开来', '继往开来')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body)
+    expect(body).toHaveProperty('ops')
+    expect(body).toHaveProperty('errors')
+    expect(body).toHaveProperty('hunks')
+    expect(body).toHaveProperty('tokens')
+    expect(body).toHaveProperty('ms')
+    expect(body.errors).toHaveLength(1)
+    expect(body.errors[0]).toMatchObject({ id: 'e1', original: '既', corrected: '继' })
+  })
+
+  it('响应头可观测：X-Diff-Engine / X-Diff-Ms / X-Diff-Ops / X-Diff-Errors', async () => {
+    const r = await postDiff('湖北省张家界市', '湖南省张家界')
+    expect(r.headers['x-diff-engine']).toBe('myers@1.0')
+    expect(Number(r.headers['x-diff-ms'])).toBeGreaterThanOrEqual(0)
+    expect(Number(r.headers['x-diff-length-left'])).toBe(7)
+    expect(Number(r.headers['x-diff-length-right'])).toBe(6)
+    expect(Number(r.headers['x-diff-ops'])).toBeGreaterThan(0)
+    expect(Number(r.headers['x-diff-errors'])).toBeGreaterThan(0)
+  })
+
+  it('空字符串入参：返回 200 + 空 ops / 空 errors', async () => {
+    const r = await postDiff('', '')
+    expect(r.status).toBe(200)
+    const body = JSON.parse(r.body)
+    expect(body.ops).toEqual([])
+    expect(body.errors).toEqual([])
+    expect(body.meta.errorCount).toBe(0)
+  })
+
+  it('非 JSON 请求体 → 500 / 解析失败', async () => {
+    const r = await httpReq('POST', '/api/inspect/diff',
+      { 'Content-Type': 'application/json' },
+      'not a json')
+    expect([400, 500]).toContain(r.status)
+  })
+
+  it('【契约】round-trip：ops 重建 left/right 字符串', async () => {
+    const left = 'this is a test with some 中文 mixed in'
+    const right = 'this is a test with 一些 中文 mixed up'
+    const r = await postDiff(left, right)
+    expect(r.status).toBe(200)
+    const { ops } = JSON.parse(r.body)
+    const rebuiltLeft = ops.filter(o => o.op !== 'insert').map(o => o.text).join('')
+    const rebuiltRight = ops.filter(o => o.op !== 'delete').map(o => o.text).join('')
+    expect(rebuiltLeft).toBe(left)
+    expect(rebuiltRight).toBe(right)
+  })
+
+  it('【性能】100KB 双栏 diff < 200ms', async () => {
+    const left = '智能校对场景'.repeat(10000)
+    const right = left.slice(0, 30000) + '改' + left.slice(30000)
+    const t0 = Date.now()
+    const r = await postDiff(left, right)
+    const roundMs = Date.now() - t0
+    expect(r.status).toBe(200)
+    expect(roundMs).toBeLessThan(400) // 含 HTTP + JSON 序列化
+    expect(Number(r.headers['x-diff-ms'])).toBeLessThan(200)
   })
 })

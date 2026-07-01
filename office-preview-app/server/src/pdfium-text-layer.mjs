@@ -64,6 +64,167 @@ export function buildRunBboxHtml(runs, pageWidthPx, pageHeightPx) {
   return `<div class="pdf-text-layer" data-pdfium="4" data-page-w="${pageWidthPx.toFixed(2)}" data-page-h="${pageHeightPx.toFixed(2)}">${spans.join('')}</div>`
 }
 
+/**
+ * v3.1：字符级 text-layer（用于翻译对照 + hover 联动）
+ *
+ * 与 v4 的差异：
+ *   - 把每个 PDFium run 拆成 char-level span（一字一 span）
+ *   - 每个 char span 带 data-tgt-idx（target 字符索引）+ data-src-idx（src 字符索引）
+ *   - charMap 用于把 tgt 字符位置映射回 src 字符位置
+ *   - data-pdfium="5"（不兼容 v4，旧产物自动重生）
+ *
+ * @param {Array<{str,left,right,top,bottom,fontSize}>} runs - PDFium 提取的 runs
+ * @param {number} pageWidthPx
+ * @param {number} pageHeightPx
+ * @param {string} targetText - 译文全文（用于把 run.str 锚定到具体 tgt 字符位置）
+ * @param {Array<{srcStart,srcEnd,tgtStart,tgtEnd}>} charMap - 字符级对应
+ * @returns {string} HTML 字符串
+ */
+export function buildTextLayerWithCharMap(runs, pageWidthPx, pageHeightPx, targetText, charMap) {
+  const w = pageWidthPx.toFixed(2)
+  const h = pageHeightPx.toFixed(2)
+  if (!runs.length) {
+    return `<div class="pdf-text-layer" data-pdfium="5" data-page-w="${w}" data-page-h="${h}"></div>`
+  }
+
+  // 1) 构建 tgt idx → src idx 查找表
+  //    charMap 一段 (srcStart..srcEnd) 对应 (tgtStart..tgtEnd)
+  //    每段内 tgtStart 对应 srcStart，后续 tgt 仍属同一 src（hover 时高亮整段）
+  const tgtToSrc = new Array(targetText.length).fill(-1)
+  for (const seg of charMap) {
+    for (let t = seg.tgtStart; t < seg.tgtEnd; t++) {
+      if (t < tgtToSrc.length) tgtToSrc[t] = seg.srcStart
+    }
+  }
+
+  // 2) 把每个 run 拆成 char span
+  const spans = []
+  let tgtSearchPos = 0
+  for (const run of runs) {
+    const runStr = run.str
+    // 找到 runStr 在 targetText 中的位置
+    const startPos = targetText.indexOf(runStr, tgtSearchPos)
+    if (startPos === -1) {
+      // 降级：找不到时输出整 run span（无 char-level data）
+      spans.push(runToSpan(run))
+      continue
+    }
+    tgtSearchPos = startPos + runStr.length
+
+    // 按 char 拆分（处理 surrogate pair：Array.from 保证正确）
+    const runChars = Array.from(runStr)
+    const runWidth = run.right - run.left
+    const charWidth = runChars.length > 0 ? runWidth / runChars.length : runWidth
+    for (let i = 0; i < runChars.length; i++) {
+      const tgtIdx = startPos + i
+      const srcIdx = tgtToSrc[tgtIdx] ?? -1
+      const charLeft = run.left + i * charWidth
+      const charWidthActual = charWidth
+      spans.push(charToSpan({
+        str: runChars[i],
+        left: charLeft,
+        right: charLeft + charWidthActual,
+        top: run.top,
+        bottom: run.bottom,
+        fontSize: run.fontSize,
+        tgtIdx,
+        srcIdx,
+      }))
+    }
+  }
+
+  return `<div class="pdf-text-layer" data-pdfium="5" data-page-w="${w}" data-page-h="${h}">${spans.join('')}</div>`
+}
+
+/** 单 char → span（带 data-tgt-idx / data-src-idx） */
+function charToSpan({ str, left, right, top, bottom, fontSize, tgtIdx, srcIdx }) {
+  const fs = Math.max(fontSize, 1)
+  const inkW = right - left
+  const inkH = bottom - top
+  const topPx = top.toFixed(2)
+  const height = Math.max(inkH, fs * 0.85).toFixed(2)
+  const leftPx = left.toFixed(2)
+  const width = Math.max(inkW, fs * 0.5).toFixed(2)
+  return `<span data-tgt-idx="${tgtIdx}" data-src-idx="${srcIdx}" style="position:absolute;left:${leftPx}px;top:${topPx}px;width:${width}px;height:${height}px;font-size:${fs.toFixed(2)}px">${escapeHtml(str)}</span>`
+}
+
+/**
+ * v6 fullDoc 文字层（global charMap + pageOffset 切片）
+ * 模型：claude-sonnet-4-6
+ *
+ * 与 v5 (buildTextLayerWithCharMap) 的差异：
+ *   - charMap 是 fullDoc 内的全局 offset（不是单页 offset）
+ *   - pageSlice 让本函数能按页切分 fullDoc 文字层
+ *   - 每个 span 的 data-tgt-idx / data-src-idx 是 fullDoc 全局 offset
+ *   - data-pdfium="6"
+ *
+ * @param {Array<{str,left,right,top,bottom,fontSize}>} runs - PDFium 提取的 runs（单页）
+ * @param {number} pageWidthPx
+ * @param {number} pageHeightPx
+ * @param {string} fullTgt - 全文译文（identity 时 = 全文源文）
+ * @param {Array<{srcStart,srcEnd,tgtStart,tgtEnd}>} globalCharMap - fullDoc charMap
+ * @param {{ pageCharStart: number, pageCharEnd: number }} pageSlice - 该页对应的 fullTgt 字符范围
+ * @returns {string} HTML with data-pdfium="6"
+ */
+export function buildFullDocTextLayer(runs, pageWidthPx, pageHeightPx, fullTgt, globalCharMap, pageSlice) {
+  const w = pageWidthPx.toFixed(2)
+  const h = pageHeightPx.toFixed(2)
+  const pageCharStart = pageSlice?.pageCharStart ?? 0
+  const pageCharEnd = pageSlice?.pageCharEnd ?? (fullTgt ? Array.from(fullTgt).length : 0)
+
+  if (!runs.length) {
+    return `<div class="pdf-text-layer" data-pdfium="6" data-page-w="${w}" data-page-h="${h}"></div>`
+  }
+
+  // 1) 构建 tgt idx → src idx 查找表（globalCharMap 全局映射）
+  //    charMap 一段 (srcStart..srcEnd) 对应 (tgtStart..tgtEnd)
+  //    每段内 tgtStart 对应 srcStart，后续 tgt 仍属同一 src
+  const tgtToSrc = new Array(fullTgt.length).fill(-1)
+  for (const seg of globalCharMap || []) {
+    for (let t = seg.tgtStart; t < seg.tgtEnd; t++) {
+      if (t < tgtToSrc.length) tgtToSrc[t] = seg.srcStart
+    }
+  }
+
+  // 2) 按 run 顺序拆 char-level span（pageSlice 内的部分）
+  const spans = []
+  let tgtSearchPos = pageCharStart
+  for (const run of runs) {
+    const runStr = run.str
+    // 在 fullTgt 中找 runStr（搜索起点 = pageCharStart，避免上一行的搜索 pos 干扰）
+    const startPos = fullTgt.indexOf(runStr, tgtSearchPos)
+    if (startPos === -1) {
+      // 降级：找不到时输出整 run span（无 char-level data）
+      spans.push(runToSpan(run))
+      continue
+    }
+    tgtSearchPos = startPos + runStr.length
+
+    const runChars = Array.from(runStr)
+    const runWidth = run.right - run.left
+    const charWidth = runChars.length > 0 ? runWidth / runChars.length : runWidth
+    for (let i = 0; i < runChars.length; i++) {
+      const tgtIdx = startPos + i
+      // 跳过本页范围外的字符
+      if (tgtIdx < pageCharStart || tgtIdx >= pageCharEnd) continue
+      const srcIdx = tgtToSrc[tgtIdx] ?? -1
+      const charLeft = run.left + i * charWidth
+      spans.push(charToSpan({
+        str: runChars[i],
+        left: charLeft,
+        right: charLeft + charWidth,
+        top: run.top,
+        bottom: run.bottom,
+        fontSize: run.fontSize,
+        tgtIdx,
+        srcIdx,
+      }))
+    }
+  }
+
+  return `<div class="pdf-text-layer" data-pdfium="6" data-page-w="${w}" data-page-h="${h}">${spans.join('')}</div>`
+}
+
 /** 单页提取并写 HTML 文件（page 1-based） */
 export async function pdfiumExtractTextLayer(pdfPath, page, outPath, opts = {}) {
   const dpi = opts.renderDpi || 120

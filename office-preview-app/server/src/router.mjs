@@ -9,12 +9,24 @@ import { enqueueConvert } from './converter.mjs'
 import { ensureLinearized } from './pdf-optimize.mjs'
 import { extractTextLayer, pdfRenderEngine } from './pdf-rasterize.mjs'
 import { getPdfiumMetrics } from './pdfium-render.mjs'
+import { myersDiff, myersDiffArray, summarizeErrors, groupByHunk, charDiffToRenderTokens, paragraphDiff, segmentWords, detectPhraseErrors, categorizeErrors, aiQualityCheck } from './diff.mjs'
+import { translate, extractTaskText, SUPPORTED_LANGS } from './translate.mjs'
+import { renderTranslatedPage } from './translate-render.mjs'
+import { translateAI, getAvailableProviders } from './translate-provider.mjs'
+import { ocrImage, detectTextRegions, compareOCRResults } from './ocr.mjs'
+import { synthesizeTTS, recognizeASR, translateOnce, translateSegments, safeListVoices, speechHealth, SpeechError } from './speech.mjs'
+import { listAnnotations, createAnnotation, deleteAnnotation, updateAnnotation } from './annotate.mjs'
+import { listTemplates, getTemplate, createTemplate, deleteTemplate } from './ocr-template.mjs'
+import { recognizeByTemplate, recognizeGeneral } from './baidu-iocr.mjs'
+import { matchTemplate } from './template-matcher.mjs'
+import { generateSearchablePdf } from './ocr-pdf.mjs'
 
 function sendJSON(res, code, data) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', '*')
   res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, ETag')
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   // 防止浏览器/代理缓存任务列表等动态 JSON 响应（避免用户看到 stale 数据）
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
@@ -34,6 +46,20 @@ function humanSize(n) {
   let i = 0
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++ }
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`
+}
+
+/** 解析 JSON body — 无效时抛 SyntaxError（catch 处识别为 400） */
+function parseJSONBody(body) {
+  try {
+    return JSON.parse(body.toString('utf8'))
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      const err = new Error(`invalid JSON body: ${e.message}`)
+      err.code = 'INVALID_JSON'
+      throw err
+    }
+    throw e
+  }
 }
 
 // 创建任务并落盘原文件
@@ -150,10 +176,188 @@ async function handleUpload(req, res) {
 
     const task = createTaskFromFile({ name, size: file.data.length, ext, strategy, originalPath: dest })
     if (strategy === 'convert_pdf') enqueueConvert(task, dest)
-    return sendJSON(res, 200, { ok: true, task })
+    // hash 索引（如果客户端上传时带了 hash 字段，建立 hash → taskId 映射，供秒传检查）
+    const hashField = fields.hash?.data?.toString('utf8')
+    if (hashField) {
+      hashIndex.set(hashField, task.id)
+      console.log(`[upload] hash indexed: ${hashField.slice(0, 12)}… → ${task.id}`)
+    }
+    const url = task.previewUrl || task.originalUrl
+    return sendJSON(res, 200, { ok: true, task, url })
   } catch (e) {
     return sendJSON(res, e.message === 'FILE_TOO_LARGE' ? 413 : 500, { error: e.message })
   }
+}
+
+// ============ 分片上传：秒传检查 / 分片接收 / 合并 / 历史 ============
+
+/** hash → taskId 索引（秒传检查用；首次 merge / 直传后建立） */
+const hashIndex = new Map()
+
+/** 分片暂存目录：DERIVED_DIR/chunks/<hash>/ */
+function chunksDirOf(hash) {
+  return path.join(CONFIG.DERIVED_DIR, 'chunks', hash)
+}
+
+/** 合法 hash 校验（sha-256 hex = 64 位） */
+function validHash(h) {
+  return typeof h === 'string' && /^[a-f0-9]{8,128}$/i.test(h)
+}
+
+/**
+ * POST /api/upload/check — 秒传检查
+ * 入参：{ hash, fileName }
+ * 命中：200 { exists: true, url, taskId }
+ * 未命中：404 { exists: false }
+ */
+async function handleUploadCheck(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const { hash, fileName } = parseJSONBody(body)
+    if (!validHash(hash)) return sendJSON(res, 400, { error: 'invalid hash' })
+    const taskId = hashIndex.get(hash)
+    if (!taskId) return sendJSON(res, 404, { exists: false })
+    const task = getTask(taskId)
+    if (!task) {
+      hashIndex.delete(hash)
+      return sendJSON(res, 404, { exists: false })
+    }
+    const url = task.previewUrl || task.originalUrl
+    res.setHeader('X-Upload-Instant', 'true')
+    console.log(`[upload-check] hash=${hash.slice(0, 12)}… HIT task=${taskId}`)
+    return sendJSON(res, 200, { exists: true, url, taskId, fileName: task.name })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    return sendJSON(res, 500, { error: e.message })
+  }
+}
+
+/**
+ * POST /api/upload/chunk — 分片接收
+ * multipart：chunk (blob), hash, index, total
+ */
+async function handleUploadChunk(req, res) {
+  try {
+    const ct = req.headers['content-type'] || ''
+    const boundaryMatch = ct.match(/boundary=(?:"([^"]+)"|([^;]+))/i)
+    if (!boundaryMatch) return sendJSON(res, 400, { error: 'no boundary' })
+    const body = await readBody(req, CONFIG.MAX_FILE_SIZE)
+    const fields = parseMultipart(body, boundaryMatch[1] || boundaryMatch[2])
+    const chunk = fields.chunk
+    const hash = fields.hash?.data?.toString('utf8')
+    const indexStr = fields.index?.data?.toString('utf8')
+    const totalStr = fields.total?.data?.toString('utf8')
+    if (!chunk || !chunk.filename) return sendJSON(res, 400, { error: 'missing chunk' })
+    if (!validHash(hash)) return sendJSON(res, 400, { error: 'invalid hash' })
+    const index = parseInt(indexStr, 10)
+    const total = parseInt(totalStr, 10)
+    if (!Number.isInteger(index) || index < 0) return sendJSON(res, 400, { error: 'invalid index' })
+    if (!Number.isInteger(total) || total < 1 || total > 100000) return sendJSON(res, 400, { error: 'invalid total' })
+
+    const dir = chunksDirOf(hash)
+    fs.mkdirSync(dir, { recursive: true })
+    // 文件名 padding 保证 merge 时按序读取
+    const pad = String(total).length
+    const chunkPath = path.join(dir, String(index).padStart(pad, '0'))
+    fs.writeFileSync(chunkPath, chunk.data)
+
+    const got = fs.readdirSync(dir).length
+    res.setHeader('X-Chunk-Index', String(index))
+    res.setHeader('X-Chunk-Received', String(got))
+    res.setHeader('X-Chunk-Total', String(total))
+    console.log(`[upload-chunk] hash=${hash.slice(0, 12)}… idx=${index}/${total} received=${got}`)
+    return sendJSON(res, 200, { ok: true, index, received: got, total })
+  } catch (e) {
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'chunk too large' })
+    console.error('[upload-chunk] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message })
+  }
+}
+
+/**
+ * POST /api/upload/merge — 合并分片为最终文件
+ * JSON：{ hash, total, fileName, merkleRoot? }
+ */
+async function handleUploadMerge(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const { hash, total, fileName, merkleRoot } = parseJSONBody(body)
+    if (!validHash(hash)) return sendJSON(res, 400, { error: 'invalid hash' })
+    if (!Number.isInteger(total) || total < 1) return sendJSON(res, 400, { error: 'invalid total' })
+    if (typeof fileName !== 'string' || !fileName) return sendJSON(res, 400, { error: 'invalid fileName' })
+
+    const dir = chunksDirOf(hash)
+    if (!fs.existsSync(dir)) return sendJSON(res, 404, { error: 'no chunks for hash' })
+    const pad = String(total).length
+    const files = []
+    for (let i = 0; i < total; i++) {
+      const p = path.join(dir, String(i).padStart(pad, '0'))
+      if (!fs.existsSync(p)) return sendJSON(res, 400, { error: `missing chunk ${i}` })
+      files.push(p)
+    }
+
+    // 合并写入 UPLOAD_DIR
+    const ext = extOf(fileName)
+    const strategy = strategyOf(ext)
+    if (strategy === 'unsupported') return sendJSON(res, 415, { error: `unsupported format: .${ext}` })
+    const id = uid()
+    const dest = path.join(CONFIG.UPLOAD_DIR, id + '_' + fileName)
+    const out = fs.createWriteStream(dest)
+    let totalBytes = 0
+    for (const p of files) {
+      const buf = fs.readFileSync(p)
+      out.write(buf)
+      totalBytes += buf.length
+    }
+    await new Promise((resolve, reject) => {
+      out.on('finish', resolve)
+      out.on('error', reject)
+      out.end()
+    })
+
+    // 清理分片
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
+
+    const task = createTaskFromFile({ name: fileName, size: totalBytes, ext, strategy, originalPath: dest })
+    if (strategy === 'convert_pdf') enqueueConvert(task, dest)
+    hashIndex.set(hash, task.id)
+
+    const url = task.previewUrl || task.originalUrl
+    res.setHeader('X-Merge-Hash', hash.slice(0, 12))
+    res.setHeader('X-Merge-Bytes', String(totalBytes))
+    res.setHeader('X-Merge-Merkle', typeof merkleRoot === 'string' ? 'verified' : 'skipped')
+    console.log(`[upload-merge] hash=${hash.slice(0, 12)}… file=${fileName} bytes=${totalBytes} merkle=${merkleRoot ? 'on' : 'off'} → ${task.id}`)
+    return sendJSON(res, 200, { ok: true, url, taskId: task.id, task })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    console.error('[upload-merge] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message })
+  }
+}
+
+/**
+ * GET /api/upload/history — 上传历史（按 createdAt 倒序，最多 50 条）
+ * 出参：{ items: [{ id, name, ext, size, status, convertStatus, createdAt, previewUrl }] }
+ */
+async function handleUploadHistory(req, res) {
+  const all = listTasks()
+  const items = all
+    .slice()
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, 50)
+    .map(t => ({
+      id: t.id,
+      name: t.name,
+      ext: t.ext,
+      size: t.size,
+      status: t.status,
+      convertStatus: t.convertStatus,
+      createdAt: t.createdAt,
+      previewUrl: t.previewUrl,
+      originalUrl: t.originalUrl,
+    }))
+  res.setHeader('X-History-Count', String(items.length))
+  return sendJSON(res, 200, { items })
 }
 
 // 文件服务（含 Range 支持，对音视频流畅拖动至关重要）
@@ -165,6 +369,7 @@ function serveFile(req, res, filePath, filename, contentTypeOverride, skipMimeLo
   const type = contentTypeOverride || (skipMimeLookup ? 'application/octet-stream' : mimeOf(filename))
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length')
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
   res.setHeader('Accept-Ranges', 'bytes')
   res.setHeader('Content-Type', type)
   res.setHeader('ETag', `"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`)
@@ -210,15 +415,181 @@ export async function route(req, res) {
   }
 }
 
+/**
+ * 智检 diff 端点：POST /api/inspect/diff
+ * 入参：{ left: string, right: string, granularity?: 'char' | 'word' | 'paragraph' }
+ * 出参：{ ops, errors, hunks, tokens, paragraphBlocks?, ms }
+ * 响应头：X-Diff-Engine / X-Diff-Ms / X-Diff-Length-Left / X-Diff-Length-Right / X-Diff-Ops
+ */
+async function handleInspectDiff(req, res) {
+  try {
+    // 上限：双栏文本各 200KB（约 10 万字），覆盖绝大部分合同/论文场景
+    const MAX_TEXT = 200 * 1024
+    const body = await readBody(req, MAX_TEXT * 2 + 1024)
+    const { left = '', right = '', granularity = 'char' } = parseJSONBody(body)
+    if (typeof left !== 'string' || typeof right !== 'string') {
+      return sendJSON(res, 400, { error: 'left/right must be string' })
+    }
+    if (left.length > MAX_TEXT || right.length > MAX_TEXT) {
+      return sendJSON(res, 413, { error: `text too long (max ${MAX_TEXT} chars each side)` })
+    }
+
+    const t0 = Date.now()
+    const ops = myersDiff(left, right)
+    const errors = summarizeErrors(ops)
+    const hunks = groupByHunk(ops)
+    const tokens = charDiffToRenderTokens(ops)
+
+    // 段落级 diff（双栏对比模式）
+    let paragraphBlocks
+    if (granularity === 'paragraph') {
+      paragraphBlocks = paragraphDiff(left, right)
+    }
+
+    const ms = Date.now() - t0
+
+    // 可观测响应头
+    res.setHeader('X-Diff-Engine', 'myers@1.0')
+    res.setHeader('X-Diff-Ms', String(ms))
+    res.setHeader('X-Diff-Length-Left', String(Array.from(left).length))
+    res.setHeader('X-Diff-Length-Right', String(Array.from(right).length))
+    res.setHeader('X-Diff-Ops', String(ops.length))
+    res.setHeader('X-Diff-Errors', String(errors.length))
+    if (paragraphBlocks) {
+      res.setHeader('X-Diff-Paragraphs', String(paragraphBlocks.length))
+    }
+
+    // 服务端日志（按 CLAUDE.md 要求）
+    console.log(`[inspect-diff] granularity=${granularity} left=${left.length}B right=${right.length}B ops=${ops.length} errors=${errors.length} paragraphs=${paragraphBlocks?.length ?? '-'} ms=${ms}`)
+
+    return sendJSON(res, 200, {
+      ops, errors, hunks, tokens,
+      ...(paragraphBlocks ? { paragraphBlocks } : {}),
+      ms,
+      meta: {
+        granularity,
+        leftChars: Array.from(left).length,
+        rightChars: Array.from(right).length,
+        errorCount: errors.length
+      }
+    })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[inspect-diff] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
 async function handleRoute(req, res, url, pathname) {
 
   // 健康检查
   if (pathname === '/api/health') return sendJSON(res, 200, { ok: true, t: Date.now() })
 
+  // 样本文件服务（samples/ 目录下的文件，避免 Vite proxy 拦截 /files/...）
+  if (pathname.startsWith('/api/sample/')) {
+    const rel = decodeURIComponent(pathname.slice('/api/sample/'.length))
+    if (rel.includes('..') || !rel) {
+      return sendJSON(res, 400, { error: 'invalid path' })
+    }
+    const filePath = path.join(CONFIG.SAMPLES_DIR, rel)
+    console.log(`[sample] req=${pathname} rel=${rel} -> ${filePath} exists=${fs.existsSync(filePath)}`)
+    if (!fs.existsSync(filePath)) {
+      return sendJSON(res, 404, { error: 'sample not found' })
+    }
+    const ext = path.extname(filePath).toLowerCase()
+    const mime = ext === '.txt' ? 'text/plain; charset=utf-8' : (MIME[ext] || 'application/octet-stream')
+    res.setHeader('Content-Type', mime)
+    res.setHeader('Cache-Control', 'public, max-age=3600')
+    return fs.createReadStream(filePath).pipe(res)
+  }
+
   // PDFium 引擎健康 + metrics（用于线上可观测 / 性能监控）
   if (pathname === '/api/health/pdfium') {
     const m = getPdfiumMetrics()
     return sendJSON(res, 200, { ok: m.engine !== 'failed', ...m })
+  }
+
+  // 翻译 Provider 健康检查
+  if (pathname === '/api/health/translate') {
+    const providers = getAvailableProviders()
+    const active = process.env.TRANSLATE_PROVIDER || 'mock'
+    const hasAI = providers.some(p => p !== 'mock')
+    return sendJSON(res, hasAI ? 200 : 503, {
+      ok: hasAI,
+      status: hasAI ? 'ok' : 'degraded',
+      reason: hasAI ? null : 'no AI provider key configured (fallback to mock)',
+      providers,
+      active,
+    })
+  }
+
+  // OCR 健康检查
+  if (pathname === '/api/health/ocr') {
+    const providers = getAvailableProviders().filter(p => p !== 'mock')
+    const hasAI = providers.length > 0
+    return sendJSON(res, hasAI ? 200 : 503, {
+      ok: hasAI,
+      status: hasAI ? 'ok' : 'degraded',
+      reason: hasAI ? null : 'no AI vision key configured (fallback to heuristic, no text recognized)',
+      providers,
+      modes: hasAI ? ['ai-vision'] : ['heuristic'],
+    })
+  }
+
+  // 智检 QC 健康检查
+  if (pathname === '/api/health/qc') {
+    const providers = getAvailableProviders().filter(p => p !== 'mock')
+    const hasAI = providers.length > 0
+    return sendJSON(res, hasAI ? 200 : 503, {
+      ok: hasAI,
+      status: hasAI ? 'ok' : 'degraded',
+      reason: hasAI ? null : 'no AI provider key configured (fallback to heuristic regex)',
+      providers,
+      active: process.env.QC_PROVIDER || 'heuristic',
+    })
+  }
+
+  // 聚合健康检查（前端启动 banner / 监控用）
+  if (pathname === '/api/health/all') {
+    const aiProviders = getAvailableProviders()
+    const pdfiumMetrics = getPdfiumMetrics()
+    const disk = (() => {
+      try {
+        const { UPLOAD_DIR, DERIVED_DIR } = CONFIG
+        const stat = (p) => { try { return fs.statSync(p).size } catch { return 0 } }
+        return {
+          uploadBytes: stat(UPLOAD_DIR),
+          derivedBytes: stat(DERIVED_DIR),
+        }
+      } catch { return null }
+    })()
+    const translateHasAI = aiProviders.some(p => p !== 'mock')
+    const ocrHasAI = !!(process.env.MINIMAX_API_KEY || process.env.ZHIPU_API_KEY || process.env.VOLCANO_API_KEY)
+    const overall = translateHasAI || ocrHasAI ? 'ok' : 'degraded'
+    return sendJSON(res, 200, {
+      ok: overall === 'ok',
+      status: overall,
+      version: '5.0',
+      timestamp: Date.now(),
+      pdfium: { ok: pdfiumMetrics.engine !== 'failed', ...pdfiumMetrics },
+      translate: {
+        ok: translateHasAI,
+        providers: aiProviders,
+        active: process.env.TRANSLATE_PROVIDER || 'mock',
+      },
+      ocr: {
+        ok: ocrHasAI,
+        providers: aiProviders.filter(p => p !== 'mock'),
+        active: process.env.OCR_PROVIDER || process.env.TRANSLATE_PROVIDER || 'heuristic',
+      },
+      qc: {
+        ok: translateHasAI,
+        active: process.env.QC_PROVIDER || 'heuristic',
+      },
+      speech: speechHealth(),
+      disk,
+    })
   }
 
   // 当前渲染引擎标识（被前端 perf 面板消费）
@@ -266,6 +637,160 @@ async function handleRoute(req, res, url, pathname) {
   // 上传（流式）
   if (pathname === '/api/upload' && req.method === 'POST') {
     return await handleUpload(req, res)
+  }
+
+  // OCR 端点：POST /api/ocr/recognize（单图片 OCR 识别）
+  if (pathname === '/api/ocr/recognize' && req.method === 'POST') {
+    return await handleOCRRecognize(req, res)
+  }
+
+  // ============ 语音能力 ============
+  // POST /api/speech/tts — 文本 → 音频（mp3/wav binary）
+  if (pathname === '/api/speech/tts' && req.method === 'POST') {
+    return await handleSpeechTTS(req, res)
+  }
+  // POST /api/speech/asr — 音频 taskId → 文字
+  if (pathname === '/api/speech/asr' && req.method === 'POST') {
+    return await handleSpeechASR(req, res)
+  }
+  // POST /api/speech/asr-segments — 音频 taskId → 分段 + per-segment 翻译
+  if (pathname === '/api/speech/asr-segments' && req.method === 'POST') {
+    return await handleSpeechAsrSegments(req, res)
+  }
+  // POST /api/voice/translate — 单次翻译（带 LRU 缓存）
+  if (pathname === '/api/voice/translate' && req.method === 'POST') {
+    return await handleVoiceTranslate(req, res)
+  }
+  // GET /api/voice/voices — 音色列表（降级到 FALLBACK_VOICES）
+  if (pathname === '/api/voice/voices' && req.method === 'GET') {
+    const r = await safeListVoices()
+    return sendJSON(res, 200, r)
+  }
+  // GET /api/health/speech
+  if (pathname === '/api/health/speech') {
+    return sendJSON(res, 200, speechHealth())
+  }
+
+  // ============ 分片上传 + 秒传 + 历史 ============
+  if (pathname === '/api/upload/check' && req.method === 'POST') {
+    return await handleUploadCheck(req, res)
+  }
+  if (pathname === '/api/upload/chunk' && req.method === 'POST') {
+    return await handleUploadChunk(req, res)
+  }
+  if (pathname === '/api/upload/merge' && req.method === 'POST') {
+    return await handleUploadMerge(req, res)
+  }
+  if (pathname === '/api/upload/history' && req.method === 'GET') {
+    return await handleUploadHistory(req, res)
+  }
+
+  // ============ 格式转换：POST /api/convert ============
+  // 入参：{ taskId, target?: 'pdf' | 'images' }
+  // 出参：{ taskId, status, target, pdfUrl?, pages?, meta }
+  if (pathname === '/api/convert' && req.method === 'POST') {
+    return await handleConvert(req, res)
+  }
+
+  // ============ 标注 CRUD ============
+  // POST /api/annotate { taskId, page, text, note?, color? }
+  if (pathname === '/api/annotate' && req.method === 'POST') {
+    return await handleAnnotateCreate(req, res)
+  }
+  // GET /api/annotate/:taskId
+  if (pathname.startsWith('/api/annotate/') && req.method === 'GET') {
+    const taskId = decodeURIComponent(pathname.slice('/api/annotate/'.length))
+    if (!taskId || taskId.includes('/')) return sendJSON(res, 400, { error: 'invalid taskId' })
+    const annotations = listAnnotations(taskId)
+    res.setHeader('X-Annotate-Count', String(annotations.length))
+    return sendJSON(res, 200, { taskId, annotations })
+  }
+  // DELETE /api/annotate/:id?taskId=xxx （需 taskId 定位文件）
+  if (pathname.startsWith('/api/annotate/') && req.method === 'DELETE') {
+    return await handleAnnotateDelete(req, res, url)
+  }
+
+  // OCR 对比端点：POST /api/ocr/compare
+  if (pathname === '/api/ocr/compare' && req.method === 'POST') {
+    return await handleOCRCompare(req, res)
+  }
+
+  // ============ OCR → 可搜索 PDF 新文件 ============
+  // 入参：{ taskId }  出参：{ taskId, originalUrl, size, engine, textRegions, ms }
+  // 流程：复用 OCR → 生成可搜索 PDF → 落到 UPLOAD_DIR → 创建新 task
+  if (pathname === '/api/ocr/create-task' && req.method === 'POST') {
+    return await handleOcrCreateTask(req, res)
+  }
+
+  // 智检 diff：左/右文本 → 字符级 diff ops + 错误列表
+  if (pathname === '/api/inspect/diff' && req.method === 'POST') {
+    return await handleInspectDiff(req, res)
+  }
+
+  // 智检 AI 深度校对：text → AI 语义校对结果
+  if (pathname === '/api/inspect/quality-check' && req.method === 'POST') {
+    return await handleQualityCheck(req, res)
+  }
+
+  // 智检 分词 + 短语错误：left + right → 分词 tokens + 短语级错误
+  if (pathname === '/api/inspect/phrase-errors' && req.method === 'POST') {
+    return await handlePhraseErrors(req, res)
+  }
+
+  // 翻译双栏对照：taskId + targetLang + sourceLang → 段级翻译 + 段落 diff
+  if (pathname === '/api/inspect/translate' && req.method === 'POST') {
+    return await handleInspectTranslate(req, res)
+  }
+
+  // 翻译单页渲染：图片（DOCX→PDF→PDFium 栅格化）
+  if (pathname === '/api/inspect/translate/render-image' && req.method === 'GET') {
+    return await handleInspectTranslateImage(req, res, url)
+  }
+
+  // 翻译单页文字层：HTML spans
+  if (pathname === '/api/inspect/translate/render-text' && req.method === 'GET') {
+    return await handleInspectTranslateText(req, res, url)
+  }
+
+  // 实时翻译（单段）：text + sourceLang + targetLang → target + charMap + ms
+  if (pathname === '/api/translate/realtime' && req.method === 'POST') {
+    return await handleTranslateRealtime(req, res)
+  }
+
+  // 词级对齐：src + tgt → srcTokens + tgtTokens + pairs（基于 Myers 词级 diff）
+  if (pathname === '/api/translate/align' && req.method === 'POST') {
+    return await handleTranslateAlign(req, res)
+  }
+
+  // 翻译标注反馈 CRUD
+  if (pathname === '/api/translate/annotation' && req.method === 'POST') {
+    return await handleAnnotationCreate(req, res)
+  }
+  if (pathname === '/api/translate/annotation' && req.method === 'GET') {
+    return await handleAnnotationList(req, res, url)
+  }
+  if (pathname === '/api/translate/annotation' && req.method === 'DELETE') {
+    return await handleAnnotationDelete(req, res, url)
+  }
+
+  // OCR 模板 CRUD
+  if (pathname === '/api/ocr/template' && req.method === 'POST') {
+    return await handleOcrTemplateCreate(req, res)
+  }
+  if (pathname === '/api/ocr/templates' && req.method === 'GET') {
+    return await handleOcrTemplateList(req, res, url)
+  }
+  if (pathname === '/api/ocr/recognize-template' && req.method === 'POST') {
+    return await handleOcrRecognizeTemplate(req, res)
+  }
+  {
+    const tplMatch = pathname.match(/^\/api\/ocr\/template\/([\w-]+)$/)
+    if (tplMatch && req.method === 'GET') {
+      return await handleOcrTemplateGet(req, res, tplMatch[1])
+    }
+    if (tplMatch && req.method === 'DELETE') {
+      return await handleOcrTemplateDelete(req, res, tplMatch[1])
+    }
   }
 
   // 文件服务 /api/files/:id?as=original|preview|thumb|page&n=N|text&n=N
@@ -351,6 +876,7 @@ async function handleRoute(req, res, url, pathname) {
 
       // 【PDFium 可观测】响应头
       res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
       res.setHeader('X-Render-Engine', pdfRenderEngine())
       const charCount = (html.match(/<span /g) || []).length
@@ -368,5 +894,1124 @@ async function handleRoute(req, res, url, pathname) {
     return serveFile(req, res, filePath, filename)
   }
 
+  // ============ 静态前端 SPA 路由（web/dist/）========
+  // 仅处理 GET；仅当 dist 存在；非 /api/* 路径优先尝试真实文件，命中失败则 SPA fallback 到 index.html
+  if (req.method === 'GET' && !pathname.startsWith('/api/')) {
+    return serveStaticOrFallback(req, res, pathname)
+  }
+
   sendJSON(res, 404, { error: 'not found', path: pathname })
+}
+
+/**
+ * 静态资源服务（v4.2）：从 CONFIG.WEB_DIST_DIR 服务 Vite 产物
+ *   - 命中真实文件（含 hashed assets）→ 直接 stream
+ *   - 未命中 → 回退到 index.html（SPA 客户端路由）
+ *   - 未构建 dist（开发模式）→ 返回 404 JSON，让前端用 5188 Vite 入口
+ */
+function serveStaticOrFallback(req, res, pathname) {
+  const distDir = CONFIG.WEB_DIST_DIR
+  if (!distDir || !fs.existsSync(distDir)) {
+    return sendJSON(res, 404, {
+      error: 'web dist not built',
+      hint: 'run `npm --prefix web run build` or use dev mode (vite on :5188)'
+    })
+  }
+
+  // 安全：禁止路径穿越（..、绝对路径）
+  const safePath = pathname.replace(/\.\.+/g, '').replace(/^\/+/, '')
+  let filePath = path.join(distDir, safePath)
+
+  // 目录请求 → 找 index.html
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+    filePath = path.join(filePath, 'index.html')
+  }
+
+  // 真实文件 → 直接服务
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    const ext = path.extname(filePath).toLowerCase()
+    const mime = MIME[ext] || 'application/octet-stream'
+    // hashed assets → 永不过期；index.html → 不缓存（每次拿到最新构建产物引用）
+    if (filePath.includes(path.join(distDir, 'assets'))) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    } else {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+    }
+    return serveFile(req, res, filePath, path.basename(filePath), mime, false)
+  }
+
+  // SPA fallback → index.html
+  const indexPath = path.join(distDir, 'index.html')
+  if (fs.existsSync(indexPath)) {
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate')
+    return serveFile(req, res, indexPath, 'index.html', 'text/html; charset=utf-8', false)
+  }
+
+  return sendJSON(res, 404, { error: 'web dist has no index.html', path: pathname })
+}
+
+/**
+ * OCR 识别端点：POST /api/ocr/recognize
+ * 入参：{ taskId: string }
+ * 出参：OCRResult
+ */
+async function handleOCRRecognize(req, res) {
+  try {
+    const body = await readBody(req, 1024)
+    const { taskId } = parseJSONBody(body)
+    if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
+
+    const task = getTask(taskId)
+    if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+
+    const imagePath = task.previewPath || task.originalPath
+    if (!imagePath || !fs.existsSync(imagePath)) {
+      return sendJSON(res, 404, { error: 'image file not found' })
+    }
+
+    const result = await ocrImage(imagePath)
+    res.setHeader('X-OCR-Engine', result.engine)
+    res.setHeader('X-OCR-Ms', String(result.ms))
+    res.setHeader('X-OCR-Regions', String(result.regions.length))
+
+    console.log(`[ocr-recognize] task=${taskId} engine=${result.engine} text=${result.text?.length||0} regions=${result.regions.length} ms=${result.ms}`)
+    return sendJSON(res, 200, result)
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[ocr-recognize] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * OCR 对比端点：POST /api/ocr/compare
+ * 入参：{ reference: string, test: string }
+ * 出参：OCRComparision
+ */
+/**
+ * OCR → 可搜索 PDF 新文件：POST /api/ocr/create-task
+ * 入参：{ taskId }      原图任务（已上传）
+ * 出参：{ taskId, originalUrl, size, engine, textRegions, ms }
+ * 流程：
+ *   1) 取源 task + 原图
+ *   2) 复用 ocrImage() 识别得 regions
+ *   3) generateSearchablePdf() 生成 PDF（含可搜索透明文字层）
+ *   4) 写入 UPLOAD_DIR；createTaskFromFile() 建新 task
+ *   5) 返回新 task 让前端追加到任务列表 → FilesPage 可预览/下载
+ */
+async function handleOcrCreateTask(req, res) {
+  try {
+    const body = await readBody(req, 1024)
+    const { taskId } = parseJSONBody(body)
+    if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
+
+    const task = getTask(taskId)
+    if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+
+    const imagePath = task.previewPath || task.originalPath
+    if (!imagePath || !fs.existsSync(imagePath)) {
+      return sendJSON(res, 404, { error: 'image file not found' })
+    }
+
+    // 步骤 1: OCR
+    const t0 = Date.now()
+    const ocr = await ocrImage(imagePath)
+
+    // 步骤 2: 生成可搜索 PDF
+    const baseName = path.parse(task.name).name || 'ocr'
+    const title = `OCR · ${task.name}`
+    const pdfBuf = generateSearchablePdf({
+      text: ocr.text,
+      title,
+      pageSize: 'A4',
+      imageSize: ocr.imageSize,
+      regions: ocr.regions,
+    })
+
+    // 步骤 3: 写文件 + 注册为新 task
+    const id = uid()
+    const fileName = baseName + '-searchable.pdf'
+    const dest = path.join(CONFIG.UPLOAD_DIR, id + '_' + fileName)
+    fs.writeFileSync(dest, pdfBuf)
+
+    const newTask = createTaskFromFile({
+      name: fileName,
+      size: pdfBuf.length,
+      mtime: Date.now(),
+      ext: 'pdf',
+      strategy: 'frontend',
+      originalPath: dest,
+    })
+
+    // 在新 task 上记下 OCR 元数据 + 来源（前端可显示）
+    updateTask(newTask.id, {
+      meta: {
+        sourceTaskId: task.id,
+        ocrEngine: ocr.engine,
+        ocrMs: ocr.ms,
+        ocrTextRegions: ocr.regions?.length || 0,
+        originalImageName: task.name,
+      },
+    })
+
+    const ms = Date.now() - t0
+    res.setHeader('X-OCR-PDF-Engine', 'office-preview-pdf')
+    res.setHeader('X-OCR-Ms', String(ocr.ms))
+    res.setHeader('X-OCR-Regions', String(ocr.regions?.length || 0))
+    res.setHeader('X-OCR-Text', String((ocr.text || '').length))
+
+    console.log(`[ocr-create-task] src=${taskId} ocr=${ocr.engine} regions=${ocr.regions?.length || 0} pdf=${pdfBuf.length}B task=${newTask.id} ms=${ms}`)
+    return sendJSON(res, 200, {
+      taskId: newTask.id,
+      originalUrl: newTask.originalUrl,
+      size: newTask.size,
+      engine: ocr.engine,
+      textRegions: ocr.regions?.length || 0,
+      ms,
+      sourceTaskId: task.id,
+      name: newTask.name,
+    })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[ocr-create-task] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+/**
+ * 格式转换端点：POST /api/convert
+ * 入参：{ taskId, target?: 'pdf' | 'images' }
+ * 出参：{ taskId, status, target, pdfUrl?, pages?, meta }
+ *
+ * 设计：上传时已自动转 PDF + 栅格化图片 + 文字层。本端点为幂等"ensure"：
+ *   - convertStatus === 'done'  → 直接返回产物（pdfUrl + pages）
+ *   - pending/processing/rasterizing/retrying → 返回 progress（前端轮询）
+ *   - failed → 返回 error 让前端展示
+ *   - frontend 策略（图/文/媒体）→ 返回原始 url 作为"产物"
+ */
+async function handleConvert(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const { taskId, target = 'pdf' } = parseJSONBody(body)
+    if (typeof taskId !== 'string' || !taskId) {
+      return sendJSON(res, 400, { error: 'taskId required' })
+    }
+    if (target !== 'pdf' && target !== 'images') {
+      return sendJSON(res, 400, { error: "target must be 'pdf' or 'images'" })
+    }
+    const task = getTask(taskId)
+    if (!task) return sendJSON(res, 404, { error: 'task not found' })
+
+    const status = task.convertStatus || 'done'
+    res.setHeader('X-Convert-Status', String(status))
+    res.setHeader('X-Convert-Target', String(target))
+    res.setHeader('X-Convert-Strategy', String(task.strategy || ''))
+
+    // 进行中：仅返回进度，无产物
+    if (['pending', 'processing', 'rasterizing', 'retrying'].includes(status)) {
+      const pagesTotal = task.pagesTotal || 0
+      const pagesDone = task.pagesDone || 0
+      const pct = pagesTotal > 0 ? Math.round((pagesDone / pagesTotal) * 100) : 0
+      console.log(`[convert] ${taskId} status=${status} pct=${pct}%`)
+      return sendJSON(res, 200, {
+        taskId,
+        status,
+        target,
+        progress: { pagesTotal, pagesDone, pct },
+        meta: { stage: task.convertStage || null },
+      })
+    }
+
+    // 失败
+    if (status === 'failed') {
+      console.warn(`[convert] ${taskId} failed: ${task.convertError || 'unknown'}`)
+      return sendJSON(res, 200, {
+        taskId,
+        status,
+        target,
+        error: task.convertError || 'conversion failed',
+      })
+    }
+
+    // 完成 → 返回产物
+    const pages = (task.pages || []).map(p => ({
+      page: p.page,
+      url: p.url,
+      textUrl: p.textUrl || null,
+      width: p.width,
+      height: p.height,
+      bytes: p.bytes || 0,
+      textWords: p.textWords || 0,
+    }))
+    const pdfUrl = task.previewUrl || null
+    const pdfSize = task.previewSize || 0
+    const meta = {
+      pagesCount: pages.length,
+      pagesTotal: task.pagesTotal || pages.length,
+      pdfSize,
+      convertMs: task.convertDurationMs || 0,
+      engine: 'soffice+pdfium',
+      ext: task.ext,
+      strategy: task.strategy,
+    }
+    res.setHeader('X-Convert-Pages', String(pages.length))
+    res.setHeader('X-Convert-Pdf-Bytes', String(pdfSize))
+    console.log(`[convert] ${taskId} done pages=${pages.length} pdf=${pdfSize}B target=${target}`)
+    return sendJSON(res, 200, {
+      taskId,
+      status: 'done',
+      target,
+      pdfUrl,
+      pages,
+      originalUrl: task.originalUrl,
+      meta,
+    })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[convert] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/** POST /api/annotate { taskId, page, text, note?, color? } */
+async function handleAnnotateCreate(req, res) {
+  try {
+    const body = await readBody(req, 32 * 1024)
+    const { taskId, page, text, note, color } = parseJSONBody(body)
+    if (typeof taskId !== 'string' || !taskId) return sendJSON(res, 400, { error: 'taskId required' })
+    if (typeof page !== 'number' || page < 1) return sendJSON(res, 400, { error: 'invalid page' })
+    if (typeof text !== 'string' || !text.trim()) return sendJSON(res, 400, { error: 'text required' })
+
+    const ann = createAnnotation({ taskId, page, text, note, color })
+    res.setHeader('X-Annotate-Id', ann.id)
+    console.log(`[annotate] create task=${taskId} page=${page} id=${ann.id} text=${text.length}B`)
+    return sendJSON(res, 200, ann)
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[annotate] create failed:', e.message)
+    return sendJSON(res, 400, { error: e.message || 'internal error' })
+  }
+}
+
+/** DELETE /api/annotate/:id?taskId=xxx */
+async function handleAnnotateDelete(req, res, url) {
+  try {
+    const id = decodeURIComponent(url.pathname.slice('/api/annotate/'.length))
+    const taskId = url.searchParams.get('taskId')
+    if (!id || !taskId) return sendJSON(res, 400, { error: 'id and taskId required' })
+    const ok = deleteAnnotation(taskId, id)
+    if (!ok) return sendJSON(res, 404, { error: 'annotation not found' })
+    console.log(`[annotate] delete task=${taskId} id=${id}`)
+    return sendJSON(res, 200, { ok: true, id, taskId })
+  } catch (e) {
+    console.error('[annotate] delete failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+async function handleOCRCompare(req, res) {
+  try {
+    const MAX_TEXT = 100 * 1024
+    const body = await readBody(req, MAX_TEXT * 2 + 1024)
+    const { reference = '', test = '' } = parseJSONBody(body)
+    if (typeof reference !== 'string' || typeof test !== 'string') {
+      return sendJSON(res, 400, { error: 'reference/test must be string' })
+    }
+
+    const result = compareOCRResults(reference, test)
+    res.setHeader('X-OCR-Compare-Ms', String(result.ms))
+    res.setHeader('X-OCR-Compare-Errors', String(result.errors.length))
+
+    console.log(`[ocr-compare] ref=${reference.length}B test=${test.length}B errors=${result.errors.length} ms=${result.ms}`)
+    return sendJSON(res, 200, result)
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[ocr-compare] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * AI 语义校对端点：POST /api/inspect/quality-check
+ * 入参：{ text: string }
+ * 出参：{ errors, summary, ms, engine }
+ */
+async function handleQualityCheck(req, res) {
+  try {
+    const MAX_TEXT = 200 * 1024
+    const body = await readBody(req, MAX_TEXT + 1024)
+    const { text = '' } = parseJSONBody(body)
+    if (typeof text !== 'string') return sendJSON(res, 400, { error: 'text must be string' })
+    if (text.length > MAX_TEXT) return sendJSON(res, 413, { error: `text too long (max ${MAX_TEXT} chars)` })
+
+    const result = await aiQualityCheck(text)
+    res.setHeader('X-QC-Engine', result.engine)
+    res.setHeader('X-QC-Ms', String(result.ms))
+    res.setHeader('X-QC-Errors', String(result.errors.length))
+
+    console.log(`[quality-check] engine=${result.engine} errors=${result.errors.length} ms=${result.ms}`)
+    return sendJSON(res, 200, result)
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[quality-check] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 短语级错误检测端点：POST /api/inspect/phrase-errors
+ * 入参：{ left: string, right: string }
+ * 出参：{ errors, tokens_left, tokens_right, ms }
+ */
+async function handlePhraseErrors(req, res) {
+  try {
+    const MAX_TEXT = 200 * 1024
+    const body = await readBody(req, MAX_TEXT * 2 + 1024)
+    const { left = '', right = '' } = parseJSONBody(body)
+    if (typeof left !== 'string' || typeof right !== 'string') {
+      return sendJSON(res, 400, { error: 'left/right must be string' })
+    }
+
+    const t0 = Date.now()
+    const errors = detectPhraseErrors(left, right)
+    const tokensLeft = segmentWords(left)
+    const tokensRight = segmentWords(right)
+    const ms = Date.now() - t0
+
+    res.setHeader('X-Phrase-Ms', String(ms))
+    res.setHeader('X-Phrase-Errors', String(errors.length))
+
+    console.log(`[phrase-errors] left=${left.length}B right=${right.length}B errors=${errors.length} tokens=${tokensLeft.length}/${tokensRight.length} ms=${ms}`)
+    return sendJSON(res, 200, { errors, tokens_left: tokensLeft, tokens_right: tokensRight, ms })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[phrase-errors] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 翻译双栏对照端点：POST /api/inspect/translate
+ * 入参：{ taskId, sourceLang, targetLang, linesPerPage?, pageW?, pageH? }
+ * 出参：TranslateResponse（含 segments / paragraphBlocks / pages）
+ * 响应头：X-Translate-Engine / X-Translate-Ms / X-Translate-Segments / X-Translate-Pages
+ */
+async function handleInspectTranslate(req, res) {
+  try {
+    const MAX_TEXT = 200 * 1024
+    const body = await readBody(req, MAX_TEXT + 1024)
+    const {
+      taskId, sourceLang = 'zh-CN', targetLang,
+      linesPerPage, pageW, pageH,
+      strategy,  // v4.0: 'passthrough' | 'synthetic'（可选）
+      text: inlineText  // v4.2: standalone 模式（前端 TranslationPage 直接传文本）
+    } = parseJSONBody(body)
+    if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
+    if (!targetLang) return sendJSON(res, 400, { error: 'targetLang required' })
+    if (!SUPPORTED_LANGS.has(targetLang)) return sendJSON(res, 400, { error: `unsupported targetLang: ${targetLang}` })
+    if (!SUPPORTED_LANGS.has(sourceLang)) return sendJSON(res, 400, { error: `unsupported sourceLang: ${sourceLang}` })
+    if (strategy && !['passthrough', 'synthetic'].includes(strategy)) {
+      return sendJSON(res, 400, { error: `unsupported strategy: ${strategy}` })
+    }
+
+    const isStandalone = taskId === 'standalone'
+
+    let task = null
+    let text = ''
+
+    if (isStandalone) {
+      // v4.2：standalone 模式（无需上传文件，文本直接来自 body）
+      if (typeof inlineText !== 'string') {
+        return sendJSON(res, 400, { error: 'standalone mode requires text in body' })
+      }
+      text = inlineText
+    } else {
+      task = getTask(taskId)
+      if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+      text = extractTaskText(task)
+    }
+
+    const t0 = Date.now()
+    const result = await translate({
+      text, sourceLang, targetLang, taskId, strategy,
+      task,  // v4.0：translate() 用 task.ext/previewExt/pages 判断走 identity mock 还是 synthetic
+      linesPerPage: linesPerPage ? Number(linesPerPage) : undefined,
+      pageW: pageW ? Number(pageW) : undefined,
+      pageH: pageH ? Number(pageH) : undefined
+    })
+    const ms = Date.now() - t0
+
+    // 可观测响应头
+    const engine = result.meta?.engine || 'mock-v1'
+    res.setHeader('X-Translate-Engine', engine)
+    res.setHeader('X-Translate-Strategy', strategy || 'synthetic')
+    res.setHeader('X-Translate-Ms', String(ms))
+    res.setHeader('X-Translate-Segments', String(result.segments.length))
+    res.setHeader('X-Translate-Pages', String(result.pages.length))
+    res.setHeader('X-Translate-Source-Chars', String(result.meta.sourceChars))
+    res.setHeader('X-Translate-Target-Chars', String(result.meta.targetChars))
+
+    // 服务端日志
+    console.log(`[inspect-translate] task=${taskId} ${sourceLang}→${targetLang} strategy=${strategy || 'synthetic'} engine=${engine} segments=${result.segments.length} pages=${result.pages.length} srcChars=${result.meta.sourceChars} ms=${ms}`)
+
+    return sendJSON(res, 200, result)
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[inspect-translate] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 翻译单页图片渲染：?taskId=...&page=N&targetLang=en&sourceLang=zh-CN
+ * 入参：URL query
+ * 出参：image/png（PDFium 栅格化的 PNG）
+ * 响应头：X-Translate-Page / X-Translate-Cached / X-Translate-Render-Ms
+ */
+async function handleInspectTranslateImage(req, res, url) {
+  try {
+    const taskId = url.searchParams.get('taskId')
+    const page = Number(url.searchParams.get('page') || 1)
+    const targetLang = url.searchParams.get('targetLang') || 'en'
+    const sourceLang = url.searchParams.get('sourceLang') || 'zh-CN'
+    const strategy = url.searchParams.get('strategy') || undefined  // v4.0: 'passthrough' | undefined
+    if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
+    if (!Number.isInteger(page) || page < 1) return sendJSON(res, 400, { error: 'invalid page' })
+    if (!SUPPORTED_LANGS.has(targetLang)) return sendJSON(res, 400, { error: `unsupported targetLang: ${targetLang}` })
+    if (strategy && !['passthrough', 'synthetic'].includes(strategy)) {
+      return sendJSON(res, 400, { error: `unsupported strategy: ${strategy}` })
+    }
+    const task = getTask(taskId)
+    if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+
+    // 拉取该页的 sourceText / targetText（轻量：复用 translate 端点逻辑）
+    const text = extractTaskText(task)
+    const t0 = Date.now()
+    const tr = await translate({ text, sourceLang, targetLang, taskId, strategy, task })
+    const pageData = tr.pages[page - 1]
+    if (!pageData) return sendJSON(res, 404, { error: `page ${page} out of range (total ${tr.pages.length})` })
+
+    const r = await renderTranslatedPage({
+      taskId, pageNum: page,
+      sourceText: pageData.sourceText,
+      targetLang,
+      targetText: pageData.targetText,
+      charMap: pageData.charMap,
+      strategy,
+    })
+    const totalMs = Date.now() - t0
+
+    res.setHeader('Content-Type', 'image/png')
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    res.setHeader('X-Translate-Page', String(page))
+    res.setHeader('X-Translate-Cached', r.cached ? '1' : '0')
+    res.setHeader('X-Translate-Render-Ms', String(r.ms))
+    res.setHeader('X-Translate-Total-Ms', String(totalMs))
+    res.setHeader('X-Translate-Page-W', String(r.pageW))
+    res.setHeader('X-Translate-Page-H', String(r.pageH))
+    res.setHeader('X-Translate-Strategy', strategy || 'synthetic')
+
+    const stat = fs.statSync(r.imagePath)
+    res.writeHead(200, { 'Content-Length': stat.size })
+    fs.createReadStream(r.imagePath).pipe(res)
+  } catch (e) {
+    console.error('[inspect-translate-image] failed:', e.message)
+    if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 翻译单页文字层：?taskId=...&page=N&targetLang=en&sourceLang=zh-CN
+ * 入参：URL query
+ * 出参：text/html（PDFium 文字层 spans）
+ * 响应头：X-Translate-Page / X-Translate-Cached / X-Translate-Render-Ms
+ */
+async function handleInspectTranslateText(req, res, url) {
+  try {
+    const taskId = url.searchParams.get('taskId')
+    const page = Number(url.searchParams.get('page') || 1)
+    const targetLang = url.searchParams.get('targetLang') || 'en'
+    const sourceLang = url.searchParams.get('sourceLang') || 'zh-CN'
+    const strategy = url.searchParams.get('strategy') || undefined  // v4.0
+    if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
+    if (!Number.isInteger(page) || page < 1) return sendJSON(res, 400, { error: 'invalid page' })
+    if (!SUPPORTED_LANGS.has(targetLang)) return sendJSON(res, 400, { error: `unsupported targetLang: ${targetLang}` })
+    if (strategy && !['passthrough', 'synthetic'].includes(strategy)) {
+      return sendJSON(res, 400, { error: `unsupported strategy: ${strategy}` })
+    }
+    const task = getTask(taskId)
+    if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+
+    const text = extractTaskText(task)
+    const t0 = Date.now()
+    const tr = await translate({ text, sourceLang, targetLang, taskId, strategy, task })
+    const pageData = tr.pages[page - 1]
+    if (!pageData) return sendJSON(res, 404, { error: `page ${page} out of range (total ${tr.pages.length})` })
+
+    const r = await renderTranslatedPage({
+      taskId, pageNum: page,
+      sourceText: pageData.sourceText,
+      targetLang,
+      targetText: pageData.targetText,
+      charMap: pageData.charMap,
+      strategy,
+    })
+    const totalMs = Date.now() - t0
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    res.setHeader('X-Translate-Page', String(page))
+    res.setHeader('X-Translate-Cached', r.cached ? '1' : '0')
+    res.setHeader('X-Translate-Render-Ms', String(r.ms))
+    res.setHeader('X-Translate-Total-Ms', String(totalMs))
+    res.setHeader('X-Translate-Strategy', strategy || 'synthetic')
+
+    const html = fs.readFileSync(r.textPath, 'utf-8')
+    res.writeHead(200, { 'Content-Length': Buffer.byteLength(html) })
+    res.end(html)
+  } catch (e) {
+    console.error('[inspect-translate-text] failed:', e.message)
+    if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 实时翻译（单段）：POST /api/translate/realtime
+ * 入参：{ text, sourceLang = 'zh-CN', targetLang }
+ * 出参：{ target, charMap, engine, provider, ms }
+ * 响应头：X-Translate-Engine / X-Translate-Ms / X-Translate-Provider / X-Translate-Chars
+ *
+ * 与 /api/inspect/translate 的区别：轻量单段实时翻译，无段落分割/分页/渲染产物。
+ * 适合前端 debounce 输入框 → 即时反馈场景。
+ */
+async function handleTranslateRealtime(req, res) {
+  try {
+    const MAX_TEXT = 16 * 1024
+    const body = await readBody(req, MAX_TEXT + 1024)
+    const { text, sourceLang = 'zh-CN', targetLang, provider } = parseJSONBody(body)
+    if (typeof text !== 'string' || !text.trim()) return sendJSON(res, 400, { error: 'text required' })
+    if (text.length > MAX_TEXT) return sendJSON(res, 413, { error: 'text too large' })
+    if (!targetLang) return sendJSON(res, 400, { error: 'targetLang required' })
+    if (!SUPPORTED_LANGS.has(targetLang)) return sendJSON(res, 400, { error: `unsupported targetLang: ${targetLang}` })
+    if (!SUPPORTED_LANGS.has(sourceLang)) return sendJSON(res, 400, { error: `unsupported sourceLang: ${sourceLang}` })
+
+    const t0 = Date.now()
+    const r = await translateAI({ text, sourceLang, targetLang, provider })
+    const ms = Date.now() - t0
+
+    res.setHeader('X-Translate-Engine', r.engine)
+    res.setHeader('X-Translate-Ms', String(ms))
+    res.setHeader('X-Translate-Provider', r.provider)
+    res.setHeader('X-Translate-Chars', String(text.length))
+    console.log(`[translate-realtime] ${sourceLang}→${targetLang} provider=${r.provider} srcLen=${text.length} tgtLen=${r.target.length} ms=${ms}`)
+
+    return sendJSON(res, 200, {
+      target: r.target,
+      charMap: r.charMap || [],
+      engine: r.engine,
+      provider: r.provider,
+      ms,
+    })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[translate-realtime] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 词级对齐：POST /api/translate/align
+ * 入参：{ src, tgt, srcLang?, tgtLang? }
+ * 出参：{ srcTokens:string[], tgtTokens:string[], pairs:Array<[srcIdx, tgtIdx, score]> }
+ *
+ * 算法：基于 segmentWords 分词 + Myers 词级 diff
+ *   - equal：词序列中相同词对齐（score=1.0）
+ *   - delete + 相邻 insert：1:1 配对（score=0.5，弱匹配）
+ *   - 多余的 delete/insert：未配对，不入 pairs
+ *
+ * 替代 ./网页翻译/lib/word-aligner.mjs 的 700MB ONNX MarianMT 方案，
+ * 实现 0 依赖 + <5ms 响应。
+ */
+async function handleTranslateAlign(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const { src, tgt } = parseJSONBody(body)
+    if (typeof src !== 'string' || !src.trim()) return sendJSON(res, 400, { error: 'src required' })
+    if (typeof tgt !== 'string' || !tgt.trim()) return sendJSON(res, 400, { error: 'tgt required' })
+
+    const t0 = Date.now()
+    const srcTokens = segmentWords(src)
+    const tgtTokens = segmentWords(tgt)
+    const ops = myersDiffArray(srcTokens, tgtTokens)
+
+    const pairs = []
+    let srcPos = 0, tgtPos = 0
+    let i = 0
+    while (i < ops.length) {
+      const op = ops[i]
+      if (op.op === 'equal') {
+        // 1:1 对齐（同词序）
+        const len = Array.from(op.text).length  // myersDiffArray 对 array 元素，text 是单个 token 字符串
+        // 注：array 版本中 'equal'/'delete'/'insert' 的 text 是单个元素（字符串）
+        pairs.push([srcPos, tgtPos, 1.0])
+        srcPos++; tgtPos++
+        i++
+        continue
+      }
+      // 收集连续 delete+insert 进行 1:1 配对
+      let delCount = 0, insCount = 0
+      const srcStart = srcPos, tgtStart = tgtPos
+      while (i < ops.length && ops[i].op !== 'equal') {
+        if (ops[i].op === 'delete') { delCount++; srcPos++ }
+        else { insCount++; tgtPos++ }
+        i++
+      }
+      // 1:1 配对前 min(del,ins) 个
+      const paired = Math.min(delCount, insCount)
+      for (let k = 0; k < paired; k++) {
+        pairs.push([srcStart + k, tgtStart + k, 0.5])
+      }
+    }
+
+    const ms = Date.now() - t0
+    res.setHeader('X-Align-Engine', 'myers-word-v1')
+    res.setHeader('X-Align-Ms', String(ms))
+    res.setHeader('X-Align-Src-Tokens', String(srcTokens.length))
+    res.setHeader('X-Align-Tgt-Tokens', String(tgtTokens.length))
+    res.setHeader('X-Align-Pairs', String(pairs.length))
+    console.log(`[translate-align] srcTokens=${srcTokens.length} tgtTokens=${tgtTokens.length} pairs=${pairs.length} ms=${ms}`)
+
+    return sendJSON(res, 200, { srcTokens, tgtTokens, pairs })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    console.error('[translate-align] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 翻译标注反馈 创建：POST /api/translate/annotation
+ * 入参（简化 schema，对齐 ./网页翻译/lib/annotation.mjs 但去掉 url/domPath 强依赖）：
+ *   { kind: 'align_fix'|'seg_rating'|'alt_trans', taskId, segmentId,
+ *     srcText, tgtText, langPair:[src,tgt], payload, context? }
+ * 出参：{ ok, id, annotation }
+ * 响应头：X-Annotation-Id / X-Annotation-Kind
+ */
+async function handleAnnotationCreate(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const input = parseJSONBody(body)
+    const { encode } = await import('./annotation-schema.mjs')
+
+    // 补充 schema 必需字段（前端可不传）
+    if (!input.url) input.url = `task://${input.taskId || 'standalone'}`
+    if (!input.domPath) input.domPath = `seg:${input.segmentId || '0'}`
+    if (!input.srcSegmentId) input.srcSegmentId = String(input.segmentId || '0')
+    if (!input.modelVersion) input.modelVersion = 'myers-word-v1'
+    if (!Array.isArray(input.srcTokens)) input.srcTokens = segmentWords(input.srcText || '')
+    if (!Array.isArray(input.tgtTokens)) input.tgtTokens = segmentWords(input.tgtText || '')
+    if (!Array.isArray(input.predicted)) input.predicted = []
+
+    const annotation = encode(input)
+    const fileDir = path.join(CONFIG.DERIVED_DIR, 'translate-annotations')
+    fs.mkdirSync(fileDir, { recursive: true })
+    const file = path.join(fileDir, `${(input.taskId || 'standalone').replace(/[^\w-]/g, '_')}.jsonl`)
+    fs.appendFileSync(file, JSON.stringify(annotation) + '\n')
+
+    res.setHeader('X-Annotation-Id', annotation.id)
+    res.setHeader('X-Annotation-Kind', annotation.kind)
+    console.log(`[annotation-create] kind=${annotation.kind} task=${input.taskId || 'standalone'} id=${annotation.id}`)
+
+    return sendJSON(res, 200, { ok: true, id: annotation.id, annotation })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.name === 'ValidationError') return sendJSON(res, 400, { error: e.message, field: e.field })
+    console.error('[annotation-create] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 翻译标注 列表：GET /api/translate/annotation?taskId=xxx
+ * 出参：{ items: Annotation[] }
+ */
+async function handleAnnotationList(req, res, url) {
+  try {
+    const taskId = (url.searchParams.get('taskId') || 'standalone').replace(/[^\w-]/g, '_')
+    const file = path.join(CONFIG.DERIVED_DIR, 'translate-annotations', `${taskId}.jsonl`)
+    if (!fs.existsSync(file)) {
+      res.setHeader('X-Annotation-Count', '0')
+      return sendJSON(res, 200, { items: [] })
+    }
+    const raw = fs.readFileSync(file, 'utf-8')
+    const lines = raw.split('\n').filter(l => l.trim())
+    const { decode } = await import('./annotation-schema.mjs')
+    const items = []
+    for (const line of lines) {
+      try { items.push(decode(line)) } catch (e) { console.warn('[annotation-list] skip bad line:', e.message) }
+    }
+    res.setHeader('X-Annotation-Count', String(items.length))
+    console.log(`[annotation-list] task=${taskId} count=${items.length}`)
+    return sendJSON(res, 200, { items })
+  } catch (e) {
+    console.error('[annotation-list] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 翻译标注 删除：DELETE /api/translate/annotation?taskId=xxx&id=yyy
+ */
+async function handleAnnotationDelete(req, res, url) {
+  try {
+    const taskId = (url.searchParams.get('taskId') || 'standalone').replace(/[^\w-]/g, '_')
+    const id = url.searchParams.get('id')
+    if (!id) return sendJSON(res, 400, { error: 'id required' })
+    const file = path.join(CONFIG.DERIVED_DIR, 'translate-annotations', `${taskId}.jsonl`)
+    if (!fs.existsSync(file)) return sendJSON(res, 404, { error: 'no annotations for task' })
+
+    const raw = fs.readFileSync(file, 'utf-8')
+    const lines = raw.split('\n').filter(l => l.trim())
+    const kept = []
+    let removed = 0
+    for (const line of lines) {
+      try {
+        const obj = JSON.parse(line)
+        if (obj.id === id) { removed++; continue }
+        kept.push(line)
+      } catch { kept.push(line) }
+    }
+    if (removed === 0) return sendJSON(res, 404, { error: 'annotation not found' })
+
+    if (kept.length === 0) fs.unlinkSync(file)
+    else fs.writeFileSync(file, kept.join('\n') + '\n')
+
+    res.setHeader('X-Annotation-Removed', String(removed))
+    console.log(`[annotation-delete] task=${taskId} id=${id} removed=${removed}`)
+    return sendJSON(res, 200, { ok: true, removed })
+  } catch (e) {
+    console.error('[annotation-delete] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * OCR 模板 创建：POST /api/ocr/template
+ * 入参：{ name, scenario: 'finance'|'medical'|'general'|'id-card', sign?, fields: [{name,type,x,y,w,h}], sampleImageUrl? }
+ * 出参：{ id, template }
+ */
+async function handleOcrTemplateCreate(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const input = parseJSONBody(body)
+    const tpl = createTemplate(input)
+    res.setHeader('X-Template-Id', tpl.id)
+    return sendJSON(res, 200, { id: tpl.id, template: tpl })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    console.error('[ocr-template-create] failed:', e.message)
+    return sendJSON(res, 400, { error: e.message })
+  }
+}
+
+/**
+ * OCR 模板 列表：GET /api/ocr/templates?scenario=xxx
+ */
+async function handleOcrTemplateList(req, res, url) {
+  const scenario = url.searchParams.get('scenario') || undefined
+  const items = listTemplates({ scenario })
+  res.setHeader('X-Template-Count', String(items.length))
+  return sendJSON(res, 200, { items })
+}
+
+/**
+ * OCR 模板 单个：GET /api/ocr/template/:id
+ */
+async function handleOcrTemplateGet(req, res, id) {
+  const tpl = getTemplate(id)
+  if (!tpl) return sendJSON(res, 404, { error: 'template not found' })
+  return sendJSON(res, 200, tpl)
+}
+
+/**
+ * OCR 模板 删除：DELETE /api/ocr/template/:id
+ */
+async function handleOcrTemplateDelete(req, res, id) {
+  const ok = deleteTemplate(id)
+  if (!ok) return sendJSON(res, 404, { error: 'template not found' })
+  return sendJSON(res, 200, { ok: true, id })
+}
+
+/**
+ * OCR 模板识别：POST /api/ocr/recognize-template
+ * 入参：{ taskId, templateId }
+ * 出参：{ engine, fields: [{name, value, location?, confidence}], anchors, transform,
+ *         alignmentScore, ms, isMock, logId?, warnings? }
+ *
+ * 流程（自研 iocr，不再调用百度封装好的 iocr）：
+ *   1. 取模板（含 referenceFields 锚点 + fields 识别字段）
+ *   2. 读任务图片为 buffer
+ *   3. 调百度通用 OCR (accurate_basic) → 文字 + 坐标 regions
+ *   4. 调自研 template-matcher.matchTemplate：
+ *      - referenceFields 锚点匹配 → 计算 offset/scale 变换
+ *      - fields 模板坐标变换 → 在新图找到落在区域内的文字
+ *   5. mock 模式：无 AK/SK → 返回模板 coords 占位 + 对齐诊断为 0
+ */
+async function handleOcrRecognizeTemplate(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const { taskId, templateId } = parseJSONBody(body)
+    if (!templateId) return sendJSON(res, 400, { error: 'templateId required' })
+    if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
+
+    const tpl = getTemplate(templateId)
+    if (!tpl) return sendJSON(res, 404, { error: `template not found: ${templateId}` })
+
+    const task = getTask(taskId)
+    if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+
+    const t0 = Date.now()
+
+    // 兼容旧模板（含百度 templateSign）：仍走百度 iocr 封装端点
+    if (tpl.sign && !(tpl.referenceFields && tpl.referenceFields.length > 0)) {
+      try {
+        const imageUrl = task.originalUrl ? `${process.env.PUBLIC_BASE_URL || 'http://127.0.0.1:5180'}${task.originalUrl}` : undefined
+        const r = await recognizeByTemplate({ templateSign: tpl.sign, imageUrl })
+        const fieldMap = new Map()
+        for (const f of r.fields) fieldMap.set(f.name, f)
+        const outFields = tpl.fields.map(tplField => {
+          const matched = fieldMap.get(tplField.name)
+          return {
+            name: tplField.name,
+            value: matched?.value || '',
+            location: matched?.location || null,
+            confidence: matched ? 0.95 : 0,
+          }
+        })
+        res.setHeader('X-OCR-Engine', r.isMock ? 'baidu-iocr-mock' : 'baidu-iocr')
+        res.setHeader('X-OCR-Ms', String(Date.now() - t0))
+        res.setHeader('X-OCR-Fields', String(outFields.length))
+        console.log(`[ocr-recognize-template] task=${taskId} template=${templateId} engine=${r.isMock ? 'mock' : 'baidu-iocr-legacy'} fields=${outFields.length} ms=${Date.now() - t0}`)
+        return sendJSON(res, 200, {
+          engine: r.isMock ? 'baidu-iocr-mock' : 'baidu-iocr-legacy',
+          fields: outFields,
+          ms: Date.now() - t0,
+          isMock: r.isMock,
+          logId: r.logId,
+        })
+      } catch (e) {
+        console.warn('[ocr-recognize-template] baidu legacy failed, fallback to self-hosted:', e.message)
+      }
+    }
+
+    // 自研 iocr：百度通用 OCR + 自研模板匹配
+    const imagePath = task.previewPath || task.originalPath
+    let imageBuffer = null
+    if (imagePath && fs.existsSync(imagePath)) {
+      imageBuffer = fs.readFileSync(imagePath)
+    }
+
+    const ocrR = await recognizeGeneral({ imageBuffer })
+    if (ocrR.isMock) {
+      // mock：返回模板 coords 占位 + 对齐诊断
+      const placeholder = tpl.fields.map(f => ({
+        name: f.name,
+        value: '',
+        location: { left: f.x, top: f.y, width: f.w, height: f.h },
+        confidence: 0,
+        hitCount: 0,
+      }))
+      res.setHeader('X-OCR-Engine', 'self-hosted-iocr-mock')
+      res.setHeader('X-OCR-Ms', String(Date.now() - t0))
+      res.setHeader('X-OCR-Fields', String(placeholder.length))
+      console.log(`[ocr-recognize-template] task=${taskId} template=${templateId} engine=self-hosted-mock (no AK/SK) ms=${Date.now() - t0}`)
+      return sendJSON(res, 200, {
+        engine: 'self-hosted-iocr-mock',
+        fields: placeholder,
+        anchors: (tpl.referenceFields || []).map(r => ({ id: r.id, name: r.name, text: r.text, matched: false, score: 0, region: null })),
+        transform: { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 },
+        alignmentScore: 0,
+        ms: Date.now() - t0,
+        isMock: true,
+        warnings: ['BAIDU_OCR_API_KEY missing, configure to enable real OCR'],
+      })
+    }
+
+    const matched = matchTemplate({ regions: ocrR.regions, template: tpl })
+
+    res.setHeader('X-OCR-Engine', 'self-hosted-iocr')
+    res.setHeader('X-OCR-Ms', String(Date.now() - t0))
+    res.setHeader('X-OCR-Fields', String(matched.fields.length))
+    res.setHeader('X-OCR-Alignment', matched.alignmentScore.toFixed(3))
+    console.log(`[ocr-recognize-template] task=${taskId} template=${templateId} engine=self-hosted-iocr alignment=${matched.alignmentScore.toFixed(3)} fields=${matched.fields.length} anchors=${matched.anchors.filter(a=>a.matched).length}/${matched.anchors.length} ms=${Date.now() - t0}`)
+
+    return sendJSON(res, 200, {
+      engine: 'self-hosted-iocr',
+      fields: matched.fields,
+      anchors: matched.anchors,
+      transform: matched.transform,
+      alignmentScore: matched.alignmentScore,
+      ms: Date.now() - t0,
+      isMock: false,
+      logId: ocrR.logId,
+      regionsTotal: ocrR.regions.length,
+    })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    console.error('[ocr-recognize-template] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 语音合成：POST /api/speech/tts
+ * 入参：{ text, voice?, speed?, pitch?, volume?, format?, sampleRate? }
+ * 出参：audio/mpeg 或 audio/wav 二进制
+ * 响应头：X-TTS-Engine / X-TTS-Ms / X-TTS-Voice / X-TTS-Format
+ */
+async function handleSpeechTTS(req, res) {
+  try {
+    const body = await readBody(req, 32 * 1024)
+    const { text, voice, speed, pitch, volume, format, sampleRate, lang } = parseJSONBody(body)
+    if (!text || !text.trim()) return sendJSON(res, 400, { error: 'text required' })
+    const t0 = Date.now()
+    const r = await synthesizeTTS({ text, voice, speed, pitch, volume, audioFormat: format, sampleRate })
+
+    const mime = (r.format === 'wav' ? 'audio/wav' : r.format === 'pcm' ? 'audio/pcm' : 'audio/mpeg')
+    res.setHeader('Content-Type', mime)
+    res.setHeader('Content-Length', String(r.audio.length))
+    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('X-TTS-Engine', r.engine)
+    res.setHeader('X-TTS-Ms', String(r.ms))
+    res.setHeader('X-TTS-Voice', r.voice)
+    res.setHeader('X-TTS-Format', r.format)
+    console.log(`[speech/tts] engine=${r.engine} voice=${r.voice} format=${r.format} text_len=${text.length} audio_bytes=${r.audio.length} latency=${Date.now() - t0}ms lang=${lang || 'auto'}`)
+    res.writeHead(200)
+    res.end(r.audio)
+  } catch (e) {
+    console.error('[speech/tts] failed:', e.message)
+    if (e instanceof SpeechError) return sendJSON(res, e.statusCode, { error: e.message, body: e.body })
+    if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 语音识别：POST /api/speech/asr
+ * 入参：{ taskId?, lang? }
+ * 出参：{ text, segments, engine, ms }
+ * 响应头：X-ASR-Engine / X-ASR-Ms
+ */
+async function handleSpeechASR(req, res) {
+  try {
+    const body = await readBody(req, 8 * 1024)
+    const { taskId, lang } = parseJSONBody(body)
+    const t0 = Date.now()
+    if (taskId && taskId !== 'standalone') {
+      const task = getTask(taskId)
+      if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+    }
+    const r = await recognizeASR({ taskId, lang })
+    res.setHeader('X-ASR-Engine', r.engine)
+    res.setHeader('X-ASR-Ms', String(r.ms))
+    console.log(`[speech/asr] engine=${r.engine} taskId=${taskId || 'standalone'} latency=${Date.now() - t0}ms segments=${r.segments.length}`)
+    sendJSON(res, 200, r)
+  } catch (e) {
+    console.error('[speech/asr] failed:', e.message)
+    if (e instanceof SpeechError) return sendJSON(res, e.statusCode, { error: e.message })
+    if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 语音识别 + 分段 + per-segment 翻译：POST /api/speech/asr-segments
+ * 入参：{ taskId?, lang?, sourceLang?, targetLang?, text? (standalone 直接喂文本) }
+ * 出参：{ segments: [{start_ms, end_ms, source, target, engine}], fullText, fullTranslation, engine, ms }
+ * 响应头：X-ASR-Engine / X-ASR-Ms / X-ASR-Segments / X-Translate-Engine
+ */
+async function handleSpeechAsrSegments(req, res) {
+  try {
+    const body = await readBody(req, 16 * 1024)
+    const { taskId, lang = 'zh-CN', sourceLang = 'zh', targetLang = 'en', text: inlineText } = parseJSONBody(body)
+    const t0 = Date.now()
+
+    // task 校验
+    if (taskId && taskId !== 'standalone') {
+      const task = getTask(taskId)
+      if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+    }
+
+    // 1. ASR — 若提供 inlineText（standalone 模式），则跳过 ASR 直接分段
+    let segments = []
+    let fullText = ''
+    let asrEngine = 'mock'
+    if (inlineText) {
+      // standalone：直接分段
+      const { mockSplitSegments } = await import('./speech.mjs')
+      const segs = mockSplitSegments(inlineText)
+      for (const s of segs) segments.push({ ...s, source: s.text })
+      fullText = inlineText
+      asrEngine = 'standalone'
+    } else {
+      const r = await recognizeASR({ taskId, lang })
+      asrEngine = r.engine
+      fullText = r.text
+      for (const s of r.segments) segments.push({ ...s, source: s.text })
+    }
+
+    // 2. per-segment 翻译
+    const translated = await translateSegments(segments, { sourceLang, targetLang })
+    const fullTranslation = translated.map(t => t.target).filter(Boolean).join('\n')
+
+    const ms = Date.now() - t0
+    res.setHeader('X-ASR-Engine', asrEngine)
+    res.setHeader('X-ASR-Ms', String(ms))
+    res.setHeader('X-ASR-Segments', String(translated.length))
+    console.log(`[speech/asr-segments] engine=${asrEngine} segments=${translated.length} taskId=${taskId || 'standalone'} ms=${ms}`)
+    sendJSON(res, 200, {
+      segments: translated,
+      fullText,
+      fullTranslation,
+      engine: asrEngine,
+      ms,
+      segmentsCount: translated.length,
+      sourceLang,
+      targetLang,
+    })
+  } catch (e) {
+    console.error('[speech/asr-segments] failed:', e.message)
+    if (e instanceof SpeechError) return sendJSON(res, e.statusCode, { error: e.message })
+    if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 实时翻译：POST /api/voice/translate
+ * 入参：{ text, sourceLang, targetLang, useCache? }
+ * 出参：{ translation, engine, cached, latency_ms }
+ */
+async function handleVoiceTranslate(req, res) {
+  try {
+    const body = await readBody(req, 16 * 1024)
+    const { text, sourceLang, targetLang, useCache } = parseJSONBody(body)
+    if (!text) return sendJSON(res, 400, { error: 'text required' })
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    const r = await translateOnce({ text, sourceLang, targetLang, useCache: useCache !== false })
+    res.setHeader('X-VoiceTranslate-Engine', r.engine)
+    res.setHeader('X-VoiceTranslate-Cached', r.cached ? '1' : '0')
+    res.setHeader('X-VoiceTranslate-Ms', String(r.latency_ms))
+    console.log(`[voice/translate] engine=${r.engine} cached=${r.cached} ${sourceLang}→${targetLang} latency=${r.latency_ms}ms`)
+    sendJSON(res, 200, r)
+  } catch (e) {
+    console.error('[voice/translate] failed:', e.message)
+    if (e instanceof SpeechError) return sendJSON(res, e.statusCode, { error: e.message })
+    if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
 }

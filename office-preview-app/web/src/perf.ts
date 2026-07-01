@@ -41,6 +41,18 @@ export interface PerfMetrics {
   pdfiumRenderMs: number    // 最近一页渲染耗时（来自 X-Render-Ms）
   pdfiumTotalMs: number     // 累计渲染耗时
   pdfiumCharsTotal: number  // 累计字符数
+  // 翻译可观测
+  translateMs: number       // 最近一次翻译总耗时
+  translateSegments: number // 最近一次翻译段数
+  translateTotalMs: number  // 累计翻译耗时
+  translateCount: number    // 累计翻译次数
+  translateEngine: string   // 翻译引擎标识
+  // WASM v2 可观测（pdf-wasm-v2 Worker + Coordinator）
+  wasmWorkerInitMs: number      // Worker 初始化耗时
+  wasmRenderQueueDepth: number  // 当前渲染队列深度
+  wasmBitmapCacheEntries: number
+  wasmBitmapCacheMB: number
+  wasmProgressivePhase: 'idle' | 'lowRes' | 'fullRes' | string
 }
 
 interface PerfStore extends PerfMetrics {
@@ -58,7 +70,9 @@ const EMPTY: PerfMetrics = {
   previewSize: 0, ratio: 0,
   alignErrorAvg: 0, alignErrorMax: 0, alignSamples: 0,
   renderEngine: 'unknown',
-  pdfiumRenderMs: 0, pdfiumTotalMs: 0, pdfiumCharsTotal: 0
+  pdfiumRenderMs: 0, pdfiumTotalMs: 0, pdfiumCharsTotal: 0,
+  translateMs: 0, translateSegments: 0, translateTotalMs: 0, translateCount: 0, translateEngine: '',
+  wasmWorkerInitMs: 0, wasmRenderQueueDepth: 0, wasmBitmapCacheEntries: 0, wasmBitmapCacheMB: 0, wasmProgressivePhase: 'idle'
 }
 
 export const usePerf = create<PerfStore>((set) => ({

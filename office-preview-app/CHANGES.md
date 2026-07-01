@@ -1,5 +1,119 @@
 # 变更记录
 
+## 2026-06-22 — 段落对齐双栏对比（CSS Grid 单滚动容器）
+
+**模型：claude-sonnet-4-6**
+
+### 目标
+双栏对比模式从 "两个独立滚动容器 + JS 同步滚动" 升级为 **CSS Grid 单滚动容器段落对齐**：
+- 每个段落 diff block 是一个 CSS Grid row（`1fr | 1px | 1fr`），CSS 自动等高两列
+- 消除全部 JS 滚动同步代码，对应段落在视觉上永远水平对齐
+- 字符级内嵌高亮：change block 内嵌字符级 charOps
+
+### 技术方案
+| 层 | 方案 |
+|---|---|
+| 段落分割 | `splitParagraphs()` 启发式（空行率 > 10% 用双换行，否则单换行） |
+| 段落 diff | `myersDiffArray()` — Myers 算法在段落数组上运行 |
+| change 配对 | 相邻 delete+insert 段落配对为 change，嵌入 `myersDiff()` 字符级 diff |
+| 前端渲染 | `DualColumnView.tsx` — `.dcv-container` 单 overflow-y，rows 用 CSS Grid |
+| 滚动同步 | 零代码——CSS Grid 等高自动对齐，删除全部 syncScroll 状态和 JS 监听 |
+
+### 修改文件
+- `server/src/diff.mjs` — 新增 `splitParagraphs`, `myersDiffArray`, `paragraphDiff`
+- `server/src/router.mjs` — `granularity='paragraph'` 分支，响应包含 `paragraphBlocks`
+- `web/src/types.ts` — 新增 `ParagraphDiffBlock` 接口
+- `web/src/inspect/DualColumnView.tsx` — 新建：段落对齐视图组件
+- `web/src/inspect/InspectCompareModal.tsx` — 双栏模式使用 `DualColumnView`，移除同步滚动代码
+- `web/src/styles.css` — 新增 `.dcv-*` 样式，新增 `.icm-dual-colheads`
+- `server/test/diff.test.mjs` — 新增 15 个段落 diff 测试（共 102 通过）
+- `web/test/InspectCompareModal.test.tsx` — 更新双栏模式测试用 `.dcv-*`（68 通过）
+
+---
+
+## 2026-06-22 — 双栏对比 · 智检 UI 重构（对标设计稿）
+
+**模型：claude-sonnet-4-6**
+
+### 目标
+严格对标 `讯飞设计稿/讯飞智检.png` 和 `讯飞设计稿/翻译对比.png` 重构 InspectCompareModal UI。
+
+### 重构要点
+| 变更 | 说明 |
+|---|---|
+| 智检模式布局 | 左侧分类导航（文字校对/文档校对等） + 主文档区 + 右侧错误列表 |
+| 错误高亮 | 原红色删除线 → 红色波浪下划线（`text-decoration: underline wavy`），选中变蓝色高亮 |
+| 错误侧栏 | 编号 + 原文→改正 + 接受/忽略按钮；点击展开错误类型 + 比对/改写 |
+| 双向联动 | 点击侧栏条目 → 主文档滚动到对应错误位置 |
+| 双栏对比模式 | 格式工具条（B/I/U/S/X²）+ 语言切换 + AI翻译 + 同步滚动 |
+| 底部工具条 | 仿设计稿编辑工具栏（B/H/T/F/I/S 等按钮） |
+| CSS 重构 | 全新 `icm-*` 类名体系；`--bg-sub` token 补充到 `:root` |
+| 测试更新 | 68 个测试全部通过，新增双栏模式 token 测试、展开详情测试 |
+
+### 修改文件
+- `web/src/inspect/InspectCompareModal.tsx` — 完全重写
+- `web/src/styles.css` — 替换 inspect 样式区段（378 行起）
+- `web/test/InspectCompareModal.test.tsx` — 更新测试适配新设计
+
+---
+
+## 2026-06-22 — 双栏对比 · 智检功能
+
+**模型：claude-sonnet-4-6 / MiniMax-M3**
+
+### 目标
+对标讯飞智检（`讯飞设计稿/翻译对比.png` + `讯飞设计稿/讯飞智检.png`），在 office-preview-app 内落地**双栏对比 + 智检错误列表**。
+
+### 新增模块（5 个）
+| 路径 | 行数 | 职责 |
+|---|---|---|
+| `server/src/diff.mjs` | 180 | Myers diff 引擎 + hunk 聚类 + 错误列表提取 |
+| `server/test/diff.test.mjs` | 239 | TDD：23 cases（基础不变式 / 中文 / Emoji / 性能 100KB） |
+| `web/src/inspect/InspectCompareModal.tsx` | 289 | 双栏对比弹层（工具条 + 双栏 + 错误侧栏 + 同步滚动） |
+| `web/test/InspectCompareModal.test.tsx` | 350 | RTL：14 cases（渲染 / 加载 / 侧栏交互 / 模式切换 / 关闭） |
+| `web/e2e/inspect-compare.spec.ts` | 114 | Playwright：5 cases（端到端 + 可观测响应头） |
+
+### 修改模块（7 个）
+| 路径 | 改什么 |
+|---|---|
+| `server/src/router.mjs` | 新增 `POST /api/inspect/diff` 端点 + 6 个可观测响应头 |
+| `server/test/router.test.mjs` | 新增 6 个 API 集成测试 |
+| `web/src/types.ts` | 新增 `DiffOp` / `RenderToken` / `DiffHunk` / `DiffError` / `InspectMode` / `InspectDiffResponse` |
+| `web/src/store.ts` | 新增 inspect state（`inspectOpen` / `inspectSource` / `inspectCompare` / `inspectMode`）+ actions |
+| `web/src/App.tsx` | 挂载 `InspectCompareModal`，wire `openInspect` 到 TaskCard |
+| `web/src/components/TaskCard.tsx` | 新增 🔍 智检按钮（仅 txt/md 可用） |
+| `web/src/styles.css` | 双栏布局 + 错误 token 配色 + 错误侧栏 + 底部 footer（+253 行） |
+
+### 关键不变式（机器可验证）
+- diff round-trip：`filter(!insert) → 原左`；`filter(!delete) → 原右`
+- 中文友好：`既往开来 → 继往开来` 识别为 1 处 change；`湖北省张家界市 → 湖南省张家界` 重建原文一致
+- 性能：100KB 双栏 diff **8ms**（远低于 200ms 门槛）
+- 全端类型契约：`RenderToken.type ∈ {equal, delete, insert}` 完备
+
+### 可观测
+- 服务端响应头：`X-Diff-Engine: myers@1.0` / `X-Diff-Ms` / `X-Diff-Length-Left/Right` / `X-Diff-Ops` / `X-Diff-Errors`
+- 服务端日志：`[inspect-diff] granularity=char left=X right=Y ops=Z errors=W ms=N`
+- 前端日志：`[inspect] mode= dual source= t1 compare= t2 ops= 7 errors= 2 ms= 10.1`
+- 失败重试：左/右栏独立重试按钮，点击重发 diff 请求
+
+### TDD 全绿
+| 套件 | 数量 | 状态 |
+|---|---|---|
+| server vitest | 87（+24：23 diff + 6 router inspect，其中 5 共用） | ✅ |
+| web vitest | 65（+14 InspectCompareModal） | ✅ |
+| TypeScript strict | 0 error | ✅ |
+| **回归**（既有 51 web + 63 server） | 全绿 | ✅ |
+
+### 不做什么（避免 over-engineering）
+- ❌ 不实现真正的「AI 校对」（需 NLU 模型，本期做纯文本 diff，target 由后端业务方注入）
+- ❌ 不实现富文本编辑器（底部工具条本期为占位 UI）
+- ❌ 不实现多语言对齐（中↔英段落映射本期不做，预留 `granularity` 字段）
+- ❌ 不动 PDF 渲染管线
+
+详见 `changes/dual-column-smart-inspect/README.md`
+
+---
+
 ## 2026-06-21 — 纯净 pdf.js scaleX 对齐（v4.4：错选+收尾覆盖双解）
 
 **模型：claude-sonnet-4-6**

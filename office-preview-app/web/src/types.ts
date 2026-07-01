@@ -120,3 +120,123 @@ export function stageLabel(stage: ConvertStage): string {
     default: return ''
   }
 }
+
+// ============ 智检 / 双栏对比 ============
+
+/** diff 单个操作（来自服务端 /api/inspect/diff） */
+export type DiffOp = { op: 'equal' | 'delete' | 'insert'; text: string }
+
+/** 前端渲染 token（type 替 op，与前端 switch 命名一致） */
+export type RenderToken = { type: 'equal' | 'delete' | 'insert'; text: string }
+
+/** hunk：UI 渲染单元（连续 equal/change 聚类） */
+export type DiffHunk =
+  | { kind: 'equal'; text: string }
+  | { kind: 'change'; original: string; corrected: string }
+
+/** diff 错误条目（侧栏列表） */
+export interface DiffError {
+  id: string
+  original: string
+  corrected: string
+  op: 'change' | 'delete' | 'insert'
+}
+
+/** 智检模式 */
+export type InspectMode = 'inspect' | 'dual' | 'translate'
+
+/** 翻译目标语言（i18n 标准代码） */
+export type LangCode = 'zh-CN' | 'en' | 'ja' | 'ko' | 'fr' | 'de' | 'es' | 'ru'
+
+/** 单条翻译结果（段落级） */
+export interface TranslationSegment {
+  /** 段落序号（与原文段落一一对应） */
+  index: number
+  /** 原文片段 */
+  source: string
+  /** 译文片段 */
+  target: string
+  /** 段落级 diff ops（可选，用于差异高亮） */
+  charOps?: DiffOp[]
+}
+
+/** 按页翻译结果（双语阅读模式） */
+export interface TranslatePage {
+  /** 页序号（从 1 开始） */
+  page: number
+  /** 该页原文（多行，'\n' 分隔） */
+  sourceText: string
+  /** 该页译文（mock-v1 翻译后） */
+  targetText: string
+  /** 该页宽度（px，默认 A4=794） */
+  pageW: number
+  /** 该页高度（px，默认 A4=1123） */
+  pageH: number
+  /** 该页首行（1-based） */
+  startLine: number
+  /** 该页末行（1-based） */
+  endLine: number
+  /** v3.1 字符级对应：src 字符范围 → tgt 字符范围 */
+  charMap?: Array<{ srcStart: number; srcEnd: number; tgtStart: number; tgtEnd: number }>
+}
+
+/** /api/inspect/translate 响应 */
+export interface TranslateResponse {
+  sourceLang: LangCode
+  targetLang: LangCode
+  segments: TranslationSegment[]
+  /** 段落级 diff（与左右两栏各段落对齐） */
+  paragraphBlocks: ParagraphDiffBlock[]
+  /** 按页翻译结果（双语阅读模式主用） */
+  pages: TranslatePage[]
+  ms: number
+  meta: {
+    segmentsCount: number
+    pagesCount: number
+    sourceChars: number
+    targetChars: number
+    engine: 'mock-v1' | 'identity-mock-v1' | string
+  }
+}
+
+/** v4.2：翻译弹层格式选择器（左右两栏同步）
+ *  - 'pdf'   : iframe 嵌入源 PDF（#page=N 锚点翻页）
+ *  - 'images': 图片+文字层（按需渲染，默认）
+ *  - 'wasm'  : 前端 pdfium WASM 渲染源 PDF
+ */
+export type TranslateRenderMode = 'pdf' | 'images' | 'wasm'
+
+/** v4.0：翻译渲染策略
+ *  - 'passthrough'：DOCX/PDF 走保留原格式管线（imagePath = 源 page.png，textLayer = v6 fullDoc）
+ *  - 'synthetic'（默认）：txt/md 走 v3.1 合成 A4 HTML → soffice → PDFium 管线
+ */
+export type TranslateStrategy = 'passthrough' | 'synthetic'
+
+/** 翻译状态 */
+export type TranslateStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+/** 段落级 diff block（双栏对比模式） */
+export interface ParagraphDiffBlock {
+  kind: 'equal' | 'change' | 'delete' | 'insert'
+  leftText: string
+  rightText: string
+  /** 字符级内嵌 diff（仅 change 类型有） */
+  charOps?: DiffOp[]
+}
+
+/** /api/inspect/diff 响应 */
+export interface InspectDiffResponse {
+  ops: DiffOp[]
+  errors: DiffError[]
+  hunks: DiffHunk[]
+  tokens: RenderToken[]
+  /** 段落级 diff blocks（granularity='paragraph' 时存在） */
+  paragraphBlocks?: ParagraphDiffBlock[]
+  ms: number
+  meta: {
+    granularity: 'char' | 'word' | 'paragraph'
+    leftChars: number
+    rightChars: number
+    errorCount: number
+  }
+}

@@ -1,11 +1,17 @@
 // 全局配置：路径、端口、MIME、格式分类
 import path from 'node:path'
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.resolve(__dirname, '..', '..')            // apps/office-preview-app
-const PROJECT_ROOT = path.resolve(ROOT, '..')              // 前端AI面试题/apps 的父级
-const SAMPLES_DIR = path.resolve(PROJECT_ROOT, '..', 'files') // 前端AI面试题/files
+const ROOT = path.resolve(__dirname, '..', '..')            // office-preview-app/
+const PROJECT_ROOT = path.resolve(ROOT, '..')              // 前端AI面试题/office-doc-preview/
+// 样本目录：office-doc-preview/files（兼容 apps/../files 历史路径）
+const SAMPLES_DIR_CANDIDATES = [
+  path.resolve(ROOT, '..', 'files'),          // office-doc-preview/files（实际位置）
+  path.resolve(PROJECT_ROOT, '..', 'files'),  // 前端AI面试题/files（历史路径）
+]
+const SAMPLES_DIR = SAMPLES_DIR_CANDIDATES.find(d => fs.existsSync(d)) || SAMPLES_DIR_CANDIDATES[0]
 
 export const CONFIG = {
   PORT: Number(process.env.PORT || 5180),
@@ -42,7 +48,12 @@ export const CONFIG = {
   // ============ PDFium 引擎配置 ============
   // 单进程 LRU 缓存 N 个文档句柄；空闲 idleMs 后自动 evict 释放 WASM 内存
   PDFIUM_CACHE_MAX_DOCS: Number(process.env.PDFIUM_CACHE_MAX_DOCS || 5),
-  PDFIUM_CACHE_IDLE_MS: Number(process.env.PDFIUM_CACHE_IDLE_MS || 30000)
+  PDFIUM_CACHE_IDLE_MS: Number(process.env.PDFIUM_CACHE_IDLE_MS || 30000),
+  // ============ 静态前端（web/dist）========
+  // 生产模式：服务端托管 Vite 产物，提供单端口入口（http://localhost:5180/）
+  // 开发模式：前端在 Vite dev server (5188)，用 proxy 转发 /api 到这里
+  // ROOT 是 office-preview-app/，所以 web/dist 是 ROOT/web/dist
+  WEB_DIST_DIR: process.env.WEB_DIST_DIR_OVERRIDE || path.resolve(ROOT, 'web', 'dist')
 }
 
 // 生产模式强制要求显式 JWT 密钥
@@ -53,10 +64,18 @@ if (process.env.NODE_ENV === 'production' && !process.env.ONLYOFFICE_JWT_SECRET)
 export const MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.webp': 'image/webp', '.avif': 'image/avif', '.gif': 'image/gif',
-  '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
   '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
   '.md': 'text/markdown; charset=utf-8',
   '.json': 'application/json',
+  // Web 前端资源（Vite 产物）
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.map': 'application/json',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
   '.aac': 'audio/aac', '.pcm': 'audio/pcm', '.amr': 'audio/amr',
   '.mp4': 'video/mp4', '.m4v': 'video/x-m4v', '.mov': 'video/quicktime',
