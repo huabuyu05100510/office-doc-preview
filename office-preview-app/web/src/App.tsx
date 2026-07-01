@@ -16,6 +16,14 @@ import { RightTaskItem } from './components/RightPanel'
 import { AlertCircleIcon } from './design/icons'
 import { AppRouter } from './router/AppRouter'
 import { routeToMenuKey, menuKeyToRoute, MenuKey } from './routes'
+import { Palette, usePalette, useRegisterNavigationItems } from './palette'
+
+/** ⌘K Palette 容器：注册导航项 + 渲染面板 */
+function PaletteHost() {
+  useRegisterNavigationItems()
+  const palette = usePalette()
+  return <Palette palette={palette} />
+}
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
 
@@ -78,6 +86,7 @@ export default function App() {
 
   return (
     <AppShell>
+      <PaletteHost />
       <AppRouter>
         <AppLayoutV2
           active={active}

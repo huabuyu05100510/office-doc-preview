@@ -2,6 +2,9 @@
 // 模型：claude-sonnet-4-6
 import React from 'react'
 import { SearchIcon, LayersIcon, OfficeIcon } from '../design/icons'
+import { useTheme } from '../hooks/useTheme'
+import { ThemeToggle } from './ThemeToggle'
+import { usePalette } from '../palette'
 
 export interface TopBarHealth {
   status: 'ok' | 'degraded'
@@ -15,12 +18,26 @@ export interface TopBarProps {
   activeLabel: string
   /** AI 服务健康状态 */
   health?: TopBarHealth
-  /** 搜索（可选） */
+  /** 搜索（可选） — 如提供则调用；如未提供则默认打开命令面板 */
   onSearch?: (q: string) => void
 }
 
 export const TopBar: React.FC<TopBarProps> = ({ activeLabel, health, onSearch }) => {
   const [q, setQ] = React.useState('')
+  const { theme, toggleTheme } = useTheme()
+  const palette = usePalette()
+
+  const handleSearchActivate = () => {
+    // 未提供 onSearch 时，触发命令面板（⌘K palette）
+    if (!onSearch) palette.open()
+  }
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Enter 键在未提供 onSearch 时也触发 palette
+    if (e.key === 'Enter' && !onSearch) {
+      palette.open()
+    }
+  }
 
   return (
     <header className="oa-topbar">
@@ -44,14 +61,19 @@ export const TopBar: React.FC<TopBarProps> = ({ activeLabel, health, onSearch })
         </span>
         <input
           type="search"
-          placeholder="搜索文件、翻译任务、智检记录…"
+          placeholder="搜索文件、翻译任务、智检记录…  按 ⌘K 打开命令面板"
           value={q}
           onChange={e => { setQ(e.target.value); onSearch?.(e.target.value) }}
-          aria-label="全局搜索"
+          onFocus={handleSearchActivate}
+          onClick={handleSearchActivate}
+          onKeyDown={handleSearchKeyDown}
+          aria-label="全局搜索（⌘K 打开命令面板）"
         />
+        <kbd className="oa-kbd oa-topbar-kbd" aria-hidden="true">⌘K</kbd>
       </div>
 
       <div className="oa-topbar-actions">
+        <ThemeToggle onClick={toggleTheme} theme={theme} />
         {health && (
           <span
             className={`oa-topbar-badge ${health.status === 'degraded' ? 'degraded' : ''}`}

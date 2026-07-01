@@ -4,11 +4,15 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './styles.css'
 import './a11y/reducedMotion.css'
+import './design/semantic.css'
+import './design/dark.css'
 import { usePrefersReducedMotion } from './hooks/usePrefersReducedMotion'
+import { useTheme } from './hooks/useTheme'
 
-// Initialize reduced-motion guard before React renders
+// Initialize guards before React renders
 function Bootstrap() {
   usePrefersReducedMotion()
+  useTheme()
   return <App />
 }
 
