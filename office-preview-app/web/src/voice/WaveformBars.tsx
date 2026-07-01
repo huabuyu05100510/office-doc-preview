@@ -1,5 +1,6 @@
 // WaveformBars — 实时音量波形条（对标 Otter.ai / iOS Voice Memo）
 // 模型：claude-sonnet-4-6
+// 颜色迁移至 semantic.ts (Phase 2.A)
 import React from 'react'
 
 export interface WaveformBarsProps {
@@ -12,7 +13,7 @@ export interface WaveformBarsProps {
 }
 
 export const WaveformBars: React.FC<WaveformBarsProps> = ({
-  levels, active, height = 80, barWidth = 4, gap = 3, color = 'var(--xf-primary, #1677ff)',
+  levels, active, height = 80, barWidth = 4, gap = 3, color = 'var(--color-primary)',
 }) => {
   return (
     <div

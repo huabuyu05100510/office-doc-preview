@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // ============================================================
 // UploadZone — 极致体验拖拽上传入口
 // ============================================================
@@ -23,16 +24,16 @@ interface Props {
 }
 
 const D = {
-  purple: '#7c3aed',
-  purpleLight: '#ede9fe',
-  gray50: '#f9fafb',
-  gray100: '#f3f4f6',
-  gray200: '#e5e7eb',
-  gray300: '#d1d5db',
-  gray400: '#9ca3af',
-  gray500: '#6b7280',
-  gray700: '#374151',
-  gray900: '#111827',
+  purple: 'var(--purple-7)',
+  purpleLight: 'var(--color-accent-bg)',
+  gray50: 'var(--color-bg-subtle)',
+  gray100: 'var(--color-bg-subtle)',
+  gray200: 'var(--color-border-light)',
+  gray300: 'var(--color-text-placeholder)',
+  gray400: 'var(--color-text-tertiary)',
+  gray500: 'var(--color-text-secondary)',
+  gray700: 'var(--color-text-secondary)',
+  gray900: 'var(--slate-12)',
 }
 
 export const UploadZone: React.FC<Props> = ({
@@ -71,7 +72,7 @@ export const UploadZone: React.FC<Props> = ({
           textAlign: 'center',
           cursor: disabled ? 'not-allowed' : 'pointer',
           background: isDragging
-            ? `linear-gradient(135deg, ${D.purpleLight} 0%, #f5f3ff 100%)`
+            ? `linear-gradient(135deg, ${D.purpleLight} 0%, var(--color-accent-bg) 100%)`
             : '#fff',
           transform: isDragging ? 'scale(1.01)' : 'scale(1)',
           transition: 'all .25s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -135,12 +136,12 @@ export const UploadZone: React.FC<Props> = ({
 
 const kbdStyle: React.CSSProperties = {
   padding: '1px 6px', fontSize: 10, fontFamily: 'monospace',
-  background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 3,
-  color: '#6b7280',
+  background: 'var(--color-bg-subtle)', border: '1px solid var(--color-border-light)', borderRadius: 3,
+  color: 'var(--color-text-secondary)',
 }
 
 const cancelAllBtnStyle: React.CSSProperties = {
   padding: '6px 14px', fontSize: 12, fontWeight: 500,
-  border: '1px solid #fecaca', borderRadius: 8, cursor: 'pointer',
-  color: '#dc2626', background: '#fff', transition: 'all .15s',
+  border: '1px solid var(--red-3)', borderRadius: 8, cursor: 'pointer',
+  color: 'var(--red-6)', background: '#fff', transition: 'all .15s',
 }

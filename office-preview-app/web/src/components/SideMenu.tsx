@@ -8,7 +8,9 @@ import {
 } from '../design/icons'
 import { menuKeyToRoute } from '../routes'
 
-export type MenuKey = 'files' | 'translate' | 'qc' | 'ocr' | 'voice' | 'convert' | 'upload'
+export type MenuKey =
+  | 'files' | 'translate' | 'qc' | 'ocr' | 'voice' | 'convert' | 'upload'
+  | 'bookmarks' | 'samples' | 'gallery'
 
 type AnyKey = string
 
@@ -58,8 +60,11 @@ export interface SideMenuProps {
   onChange?: (key: MenuKey) => void
 }
 
-// 4 大模块 + 工具集占位项
-const ACTIVE_KEYS: ReadonlySet<MenuKey> = new Set(['files', 'translate', 'qc', 'ocr', 'convert', 'upload', 'voice'])
+// 4 大模块 + 工具集占位项（bookmarks / samples / gallery 已实现）
+const ACTIVE_KEYS: ReadonlySet<MenuKey> = new Set([
+  'files', 'translate', 'qc', 'ocr', 'convert', 'upload', 'voice',
+  'bookmarks', 'samples', 'gallery',
+])
 
 export const SideMenu: React.FC<SideMenuProps> = ({ active, onChange }) => {
   const navigate = useNavigate()

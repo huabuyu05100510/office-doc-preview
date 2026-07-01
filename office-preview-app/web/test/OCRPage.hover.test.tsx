@@ -61,8 +61,8 @@ describe('OCRPage 图片区域 ↔ 文字卡 hover 联动', () => {
     fireEvent.mouseEnter(screen.getByTestId('ocr-region-rect-0'))
     await waitFor(() => {
       const card = screen.getByTestId('ocr-region-card-0') as HTMLElement
-      expect(card.style.background).toBe('rgb(230, 244, 255)')
-      expect(card.style.borderColor).toBe('rgb(22, 119, 255)')
+      expect(card.style.background).toBe('var(--color-primary-bg)')
+      expect(card.style.borderColor).toBe('var(--color-primary)')
     })
     // leave 后恢复
     fireEvent.mouseLeave(screen.getByTestId('ocr-region-rect-0'))
@@ -80,7 +80,7 @@ describe('OCRPage 图片区域 ↔ 文字卡 hover 联动', () => {
     fireEvent.mouseEnter(screen.getByTestId('ocr-region-card-1'))
     await waitFor(() => {
       const rect = screen.getByTestId('ocr-region-rect-1') as unknown as SVGElement
-      expect(rect.getAttribute('stroke')).toBe('#1677ff')
+      expect(rect.getAttribute('stroke')).toBe('var(--color-primary)')
       expect(rect.getAttribute('stroke-width')).toBe('3')
     })
   })

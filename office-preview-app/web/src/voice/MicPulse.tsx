@@ -1,5 +1,6 @@
 // MicPulse — 中央麦克风脉冲按钮（对标 Google Translate Voice Mode / iOS 录音）
 // 模型：claude-sonnet-4-6
+// 颜色迁移至 semantic.ts (Phase 2.A)
 import React from 'react'
 import { MicIcon, MicOffIcon } from '../design/icons'
 
@@ -67,9 +68,9 @@ export const MicPulse: React.FC<MicPulseProps> = ({ active, level, disabled, onC
           height: size * 0.65,
           borderRadius: '50%',
           background: active
-            ? 'linear-gradient(135deg, #ff4d4f, #cf1322)'
-            : 'linear-gradient(135deg, #1677ff, #722ed1)',
-          color: '#fff',
+            ? 'linear-gradient(135deg, var(--red-5), var(--red-7))'
+            : 'linear-gradient(135deg, var(--blue-7), var(--purple-7))',
+          color: 'var(--color-text-inverse)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',

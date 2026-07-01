@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // ============================================================
 // ContentPreview — Online 内容预览 Modal
 // 从服务端 URL 拉取文件，在线渲染，无需下载
@@ -14,16 +15,16 @@ interface Props {
 }
 
 const D = {
-  purple: '#7c3aed',
-  green: '#059669',
-  red: '#dc2626',
-  gray50: '#f9fafb',
-  gray100: '#f3f4f6',
-  gray200: '#e5e7eb',
-  gray400: '#9ca3af',
-  gray500: '#6b7280',
-  gray700: '#374151',
-  gray900: '#111827',
+  purple: 'var(--purple-7)',
+  green: 'var(--color-success)',
+  red: 'var(--red-6)',
+  gray50: 'var(--color-bg-subtle)',
+  gray100: 'var(--color-bg-subtle)',
+  gray200: 'var(--color-border-light)',
+  gray400: 'var(--color-text-tertiary)',
+  gray500: 'var(--color-text-secondary)',
+  gray700: 'var(--color-text-secondary)',
+  gray900: 'var(--slate-12)',
 }
 
 type LoadState = 'loading' | 'loaded' | 'error'
@@ -198,8 +199,8 @@ export const ContentPreview: React.FC<Props> = ({ file, onClose }) => {
             <code style={styles.urlCode}>{file.url}</code>
             <span style={{
               fontSize: 10, marginLeft: 8, padding: '2px 8px', borderRadius: 4,
-              background: state === 'loading' ? '#eff6ff' : state === 'error' ? '#fef2f2' : '#ecfdf5',
-              color: state === 'loading' ? '#2563eb' : state === 'error' ? D.red : D.green,
+              background: state === 'loading' ? 'var(--color-primary-bg)' : state === 'error' ? 'var(--color-danger-bg)' : 'var(--color-success-bg)',
+              color: state === 'loading' ? 'var(--color-accent)' : state === 'error' ? D.red : D.green,
             }}>
               {state === 'loading' ? '加载中...' : state === 'error' ? '失败' : '已加载'}
             </span>
@@ -402,11 +403,11 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#000', outline: 'none',
   },
   textBox: {
-    background: '#1e1e1e', flex: 1, overflow: 'auto', minHeight: 300,
+    background: 'var(--slate-11)', flex: 1, overflow: 'auto', minHeight: 300,
   },
   textPre: {
     margin: 0, padding: 24, fontSize: 13, lineHeight: 1.85,
-    color: '#d4d4d4', fontFamily: "'SF Mono','Monaco','Menlo','Consolas',monospace",
+    color: 'var(--color-border-light)', fontFamily: "'SF Mono','Monaco','Menlo','Consolas',monospace",
     whiteSpace: 'pre-wrap', wordBreak: 'break-word',
     userSelect: 'text', tabSize: 2,
   },

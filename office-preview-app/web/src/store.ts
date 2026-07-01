@@ -2,6 +2,29 @@
 import { create } from 'zustand'
 import type { Task, InspectMode, LangCode, TranslateResponse, TranslateStatus, TranslateRenderMode } from './types'
 
+const BOOKMARKS_KEY = 'bookmarks'
+
+/** 从 localStorage 读取已收藏任务 id 集合 */
+function loadBookmarks(): Set<string> {
+  try {
+    const raw = localStorage.getItem(BOOKMARKS_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    return new Set(Array.isArray(arr) ? arr : [])
+  } catch {
+    return new Set()
+  }
+}
+
+/** 持久化收藏任务 id 集合 */
+function saveBookmarks(set: Set<string>): void {
+  try {
+    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(Array.from(set)))
+  } catch {
+    // localStorage 满了，降级
+  }
+}
+
 interface State {
   tasks: Task[]
   loading: boolean
@@ -55,6 +78,10 @@ interface State {
   setTranslateError: (e: string | null) => void
   // 设置翻译弹层渲染格式（PDF / 图片+文字 / WASM）
   setTranslateRenderMode: (m: TranslateRenderMode) => void
+  // ============ 收藏夹（任务星标） ============
+  bookmarks: Set<string>
+  toggleBookmark: (taskId: string) => void
+  isBookmarked: (taskId: string) => boolean
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -78,6 +105,8 @@ export const useStore = create<State>((set, get) => ({
   translateResult: null,
   translateError: null,
   translateRenderMode: 'images',
+  // 收藏夹：从 localStorage 恢复
+  bookmarks: loadBookmarks(),
 
   async fetchTasks() {
     set({ loading: true })
@@ -223,5 +252,25 @@ export const useStore = create<State>((set, get) => ({
     console.info('[store] setTranslateRenderMode =', m)
     try { localStorage.setItem('translate-render-mode', m) } catch {}
     set({ translateRenderMode: m })
-  }
+  },
+
+  // 收藏夹：切换任务星标
+  toggleBookmark(taskId) {
+    const next = new Set(get().bookmarks)
+    const ts = new Date().toISOString()
+    if (next.has(taskId)) {
+      next.delete(taskId)
+      console.info(`[store ${ts}] toggleBookmark remove:`, taskId)
+    } else {
+      next.add(taskId)
+      console.info(`[store ${ts}] toggleBookmark add:`, taskId)
+    }
+    saveBookmarks(next)
+    set({ bookmarks: next })
+  },
+
+  // 收藏夹：是否已收藏
+  isBookmarked(taskId) {
+    return get().bookmarks.has(taskId)
+  },
 }))

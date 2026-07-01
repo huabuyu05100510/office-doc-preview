@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { ROUTES, menuKeyToRoute, routeToMenuKey, MENU_KEYS } from '../../src/routes'
 
 describe('route contract', () => {
-  it('exports 7 routes for the 7 menu keys', () => {
+  it('exports 10 routes for the 10 menu keys', () => {
     expect(ROUTES.files).toBe('/files')
     expect(ROUTES.translate).toBe('/translate')
     expect(ROUTES.qc).toBe('/qc')
@@ -10,10 +10,13 @@ describe('route contract', () => {
     expect(ROUTES.convert).toBe('/convert')
     expect(ROUTES.upload).toBe('/upload')
     expect(ROUTES.voice).toBe('/voice')
+    expect(ROUTES.bookmarks).toBe('/bookmarks')
+    expect(ROUTES.samples).toBe('/samples')
+    expect(ROUTES.gallery).toBe('/gallery')
   })
 
-  it('MENU_KEYS has exactly 7 entries', () => {
-    expect(MENU_KEYS).toHaveLength(7)
+  it('MENU_KEYS has exactly 10 entries', () => {
+    expect(MENU_KEYS).toHaveLength(10)
   })
 
   it('menuKeyToRoute maps every menu key to a valid route', () => {

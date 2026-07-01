@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // ============================================================
 // FilePreviewCard — 侧边栏文件预览卡片
 // ============================================================
@@ -14,19 +15,19 @@ interface Props {
 }
 
 const D = {
-  purple: '#7c3aed',
-  green: '#059669',
-  greenBg: '#ecfdf5',
-  red: '#dc2626',
-  blue: '#2563eb',
-  gray50: '#f9fafb',
-  gray100: '#f3f4f6',
-  gray200: '#e5e7eb',
-  gray300: '#d1d5db',
-  gray400: '#9ca3af',
-  gray500: '#6b7280',
-  gray700: '#374151',
-  gray900: '#111827',
+  purple: 'var(--purple-7)',
+  green: 'var(--color-success)',
+  greenBg: 'var(--color-success-bg)',
+  red: 'var(--red-6)',
+  blue: 'var(--color-accent)',
+  gray50: 'var(--color-bg-subtle)',
+  gray100: 'var(--color-bg-subtle)',
+  gray200: 'var(--color-border-light)',
+  gray300: 'var(--color-text-placeholder)',
+  gray400: 'var(--color-text-tertiary)',
+  gray500: 'var(--color-text-secondary)',
+  gray700: 'var(--color-text-secondary)',
+  gray900: 'var(--slate-12)',
 }
 
 export const FilePreviewCard: React.FC<Props> = ({ file, preview, onClose }) => {

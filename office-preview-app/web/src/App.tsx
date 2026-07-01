@@ -11,6 +11,9 @@ import { OCRPage } from './pages/OCRPage'
 import { VoicePage } from './pages/VoicePage'
 import { FormatConvertPage } from './pages/FormatConvertPage'
 import { UploadCenterPage } from './pages/UploadCenterPage'
+import { BookmarksPage } from './pages/BookmarksPage'
+import { SamplesPage } from './pages/SamplesPage'
+import { GalleryPage } from './pages/GalleryPage'
 import { useStore } from './store'
 import { RightTaskItem } from './components/RightPanel'
 import { AlertCircleIcon } from './design/icons'
@@ -56,6 +59,9 @@ const MENU_LABELS: Record<AppLayoutV2Props['active'], string> = {
   convert: '格式转换',
   upload: '上传中心',
   voice: '语音中心',
+  bookmarks: '收藏夹',
+  samples: '示例库',
+  gallery: '图片画廊',
 }
 
 export default function App() {
@@ -124,6 +130,9 @@ export default function App() {
         {active === 'voice' && <VoicePage />}
         {active === 'convert' && <FormatConvertPage />}
         {active === 'upload' && <UploadCenterPage />}
+        {active === 'bookmarks' && <BookmarksPage />}
+        {active === 'samples' && <SamplesPage />}
+        {active === 'gallery' && <GalleryPage />}
       </AppLayoutV2>
       </AppRouter>
     </AppShell>

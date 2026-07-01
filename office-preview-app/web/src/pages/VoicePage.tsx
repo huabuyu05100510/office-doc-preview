@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // VoicePage — 语音中心（对标 Google Translate Voice Mode + Otter.ai + 讯飞听见）
 // 模型：claude-sonnet-4-6
 //
@@ -165,7 +166,7 @@ function RealtimeMode() {
       <div style={{
         padding: '16px 24px',
         borderBottom: '1px solid var(--xf-border-light)',
-        background: 'var(--xf-bg-subtle, #fafafa)',
+        background: 'var(--xf-bg-subtle, var(--color-bg-subtle))',
         display: 'flex', alignItems: 'center', gap: 12,
       }}>
         <select
@@ -201,9 +202,9 @@ function RealtimeMode() {
 
       {error && (
         <div style={{
-          padding: '8px 24px', background: 'var(--xf-danger-bg, #fff1f0)',
-          borderBottom: '1px solid var(--xf-danger-border, #ffa39e)',
-          color: 'var(--xf-danger, #ff4d4f)', fontSize: 13,
+          padding: '8px 24px', background: 'var(--xf-danger-bg, var(--color-danger-bg))',
+          borderBottom: '1px solid var(--xf-danger-border, var(--red-3))',
+          color: 'var(--xf-danger, var(--color-danger))', fontSize: 13,
         }}>
           {error}
         </div>
@@ -224,7 +225,7 @@ function RealtimeMode() {
             label={listening ? '停止' : '开始'}
           />
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 14, fontWeight: 500, color: listening ? '#cf1322' : 'var(--xf-text-secondary, #4e5969)' }}>
+            <div style={{ fontSize: 14, fontWeight: 500, color: listening ? 'var(--red-6)' : 'var(--xf-text-secondary, var(--color-text-secondary))' }}>
               {listening ? '正在聆听…' : supported ? '点击麦克风开始说话' : '浏览器不支持语音识别'}
             </div>
             <div style={{ fontSize: 12, color: 'var(--xf-text-tertiary)', marginTop: 4 }}>
@@ -374,7 +375,7 @@ function TtsMode() {
             padding: '12px 24px 20px', background: 'linear-gradient(to bottom, transparent, rgba(22,119,255,0.03))',
             borderTop: '1px solid var(--xf-border-light)',
           }}>
-            <WaveformBars levels={levels} active={active || speaking} height={60} color="linear-gradient(90deg, #1677ff, #722ed1)" />
+            <WaveformBars levels={levels} active={active || speaking} height={60} color="linear-gradient(90deg, var(--color-primary), var(--color-ai))" />
           </div>
         </div>
 
@@ -601,8 +602,8 @@ function FileTranslateMode({ kind }: { kind: 'audio' | 'video' }) {
                   <div style={{
                     width: 40, height: 40, borderRadius: 6, flexShrink: 0,
                     background: kind === 'audio'
-                      ? 'linear-gradient(135deg, #f093fb, #f5576c)'
-                      : 'linear-gradient(135deg, #4facfe, #00f2fe)',
+                      ? 'linear-gradient(135deg, var(--magenta-4), var(--red-5))'
+                      : 'linear-gradient(135deg, var(--blue-4), var(--cyan-3))',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
                   }}>
                     {kind === 'audio' ? <MusicIcon size={18} /> : <VideoIcon size={18} />}
@@ -629,7 +630,7 @@ function FileTranslateMode({ kind }: { kind: 'audio' | 'video' }) {
               style={{
                 padding: '12px 16px',
                 borderBottom: '1px solid var(--xf-border-light)',
-                background: '#fafafa',
+                background: 'var(--color-bg-subtle)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
@@ -661,14 +662,14 @@ function FileTranslateMode({ kind }: { kind: 'audio' | 'video' }) {
               1,
               segments.reduce((m, s) => Math.max(m, s.end_ms || 0), 0)
             )
-            const markerColors = ['#1677ff', '#13c2c2', '#722ed1', '#52c41a', '#fa8c16', '#eb2f96', '#fa541c']
+            const markerColors = ['var(--color-primary)', 'var(--color-info)', 'var(--color-ai)', 'var(--color-success)', 'var(--orange-6)', 'var(--magenta-6)', 'var(--orange-6)']
             return (
               <div
                 data-testid="voice-timeline"
                 style={{
                   padding: '10px 16px 12px',
                   borderBottom: '1px solid var(--xf-border-light)',
-                  background: 'linear-gradient(180deg, #fafbff 0%, #fff 100%)',
+                  background: 'linear-gradient(180deg, var(--color-accent-bg) 0%, #fff 100%)',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -699,7 +700,7 @@ function FileTranslateMode({ kind }: { kind: 'audio' | 'video' }) {
                         top: 0,
                         bottom: 0,
                         width: 2,
-                        background: '#1677ff',
+                        background: 'var(--color-primary)',
                         boxShadow: '0 0 6px rgba(22,119,255,0.7)',
                         pointerEvents: 'none',
                         zIndex: 3,
@@ -796,7 +797,7 @@ function FileTranslateMode({ kind }: { kind: 'audio' | 'video' }) {
                         ? 'rgba(22,119,255,0.10)'
                         : hovered ? 'rgba(22,119,255,0.04)' : '#fff',
                       border: active
-                        ? '1.5px solid #1677ff'
+                        ? '1.5px solid var(--color-primary)'
                         : '1px solid var(--xf-border-light)',
                       cursor: 'pointer',
                       transition: 'all 120ms',
@@ -806,7 +807,7 @@ function FileTranslateMode({ kind }: { kind: 'audio' | 'video' }) {
                       <span style={{
                         fontFamily: 'SF Mono, Consolas, monospace',
                         fontSize: 11,
-                        color: active ? '#1677ff' : 'var(--xf-text-tertiary)',
+                        color: active ? 'var(--color-primary)' : 'var(--xf-text-tertiary)',
                         fontWeight: 600,
                       }}>
                         {fmtMs(seg.start_ms)} → {fmtMs(seg.end_ms)}
@@ -823,7 +824,7 @@ function FileTranslateMode({ kind }: { kind: 'audio' | 'video' }) {
                     </div>
                     <div style={{
                       fontSize: 13, lineHeight: 1.6,
-                      color: '#722ed1',
+                      color: 'var(--color-ai)',
                       borderTop: '1px dashed var(--xf-border-light)',
                       paddingTop: 6,
                     }}>
@@ -846,7 +847,7 @@ function CloneMode() {
     <div style={{ padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24 }}>
       <div style={{
         width: 96, height: 96, borderRadius: 24,
-        background: 'linear-gradient(135deg, #667eea, #764ba2)',
+        background: 'linear-gradient(135deg, var(--indigo-5), var(--purple-7))',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: '#fff', boxShadow: '0 12px 36px rgba(102,126,234,0.35)',
       }}>
@@ -886,7 +887,7 @@ function CloneMode() {
       <div style={{
         marginTop: 16, padding: '12px 20px', borderRadius: 8,
         background: 'rgba(250,173,20,0.08)', border: '1px solid rgba(250,173,20,0.3)',
-        fontSize: 12, color: '#ad6800', maxWidth: 480, textAlign: 'center',
+        fontSize: 12, color: 'var(--amber-8)', maxWidth: 480, textAlign: 'center',
       }}>
         ⚠️ 该能力依赖火山引擎 voice_cloning.2_0 接口（VOLC_VOICE_CLONE_API_KEY）。
         当前未配置凭证，UI 已就绪；服务端凭证补齐后即可启用完整链路。

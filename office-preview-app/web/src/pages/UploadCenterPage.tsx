@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // UploadCenterPage — 上传中心（AI 能力）
 // 模型：claude-sonnet-4-6
 //
@@ -127,17 +128,17 @@ export function UploadCenterPage() {
         <div className="oa-card" style={{
           padding: '14px 18px', marginBottom: 16,
           display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-          background: 'linear-gradient(135deg, #f9f0ff 0%, #e6f4ff 100%)',
+          background: 'linear-gradient(135deg, var(--color-ai-bg) 0%, var(--color-primary-bg) 100%)',
         }}>
-          <UploadIcon size={20} style={{ color: '#722ed1' }} />
+          <UploadIcon size={20} style={{ color: 'var(--color-ai)' }} />
           <div>
-            <div style={{ fontWeight: 600, color: '#1f2329' }}>
+            <div style={{ fontWeight: 600, color: 'var(--color-text)' }}>
               {meta.icon} {meta.label}
             </div>
-            <div style={{ fontSize: 12, color: '#86909c' }}>{meta.desc}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{meta.desc}</div>
           </div>
           <div style={{ flex: 1 }} />
-          <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#86909c' }}>
+          <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--color-text-tertiary)' }}>
             <span>📦 最大 {humanSize(config.maxSize)}</span>
             <span>🔢 ≤ {config.maxCount} 个</span>
             {config.chunkSize > 0 && <span>✂️ 分片 {humanSize(config.chunkSize)}</span>}
@@ -168,9 +169,9 @@ export function UploadCenterPage() {
           <div className="oa-card" style={{ padding: 16, marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 600 }}>📤 本次上传（{files.length}）</span>
-              {activeCount > 0 && <span style={{ fontSize: 12, color: '#1677ff' }}>进行中 {activeCount}</span>}
-              {successCount > 0 && <span style={{ fontSize: 12, color: '#52c41a' }}>成功 {successCount}</span>}
-              {failedCount > 0 && <span style={{ fontSize: 12, color: '#ff4d4f' }}>失败 {failedCount}</span>}
+              {activeCount > 0 && <span style={{ fontSize: 12, color: 'var(--color-primary)' }}>进行中 {activeCount}</span>}
+              {successCount > 0 && <span style={{ fontSize: 12, color: 'var(--color-success)' }}>成功 {successCount}</span>}
+              {failedCount > 0 && <span style={{ fontSize: 12, color: 'var(--color-danger)' }}>失败 {failedCount}</span>}
               <div style={{ flex: 1 }} />
               <button className="oa-btn oa-btn-ghost oa-btn-sm" onClick={clearCompleted}>清除已完成</button>
             </div>
@@ -193,9 +194,9 @@ export function UploadCenterPage() {
         {/* 上传历史 */}
         <div className="oa-card" style={{ padding: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-            <HistoryIcon size={16} style={{ color: '#86909c' }} />
+            <HistoryIcon size={16} style={{ color: 'var(--color-text-tertiary)' }} />
             <span style={{ fontWeight: 600 }}>📜 上传历史</span>
-            <span style={{ fontSize: 12, color: '#86909c' }}>
+            <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
               {filteredHistory.length} 条
               {!config.accept.includes('*') && ` （已按 ${meta.label} 过滤）`}
             </span>
@@ -230,7 +231,7 @@ export function UploadCenterPage() {
                     rel="noreferrer"
                     data-testid="uc-history-item"
                     style={{
-                      border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden',
+                      border: '1px solid var(--color-border-light)', borderRadius: 8, overflow: 'hidden',
                       background: '#fff', textDecoration: 'none', color: 'inherit',
                       transition: 'transform 200ms, box-shadow 200ms',
                       display: 'flex', flexDirection: 'column',
@@ -240,7 +241,7 @@ export function UploadCenterPage() {
                   >
                     {/* 缩略图 */}
                     <div style={{
-                      height: 120, background: '#f5f5f5', display: 'flex',
+                      height: 120, background: 'var(--color-bg-subtle)', display: 'flex',
                       alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
                       position: 'relative',
                     }}>
@@ -255,8 +256,8 @@ export function UploadCenterPage() {
                       <span style={{
                         position: 'absolute', top: 6, right: 6,
                         padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 600,
-                        background: isProcessing ? '#fff7e6' : isDone ? '#f6ffed' : '#fff1f0',
-                        color: isProcessing ? '#faad14' : isDone ? '#52c41a' : '#ff4d4f',
+                        background: isProcessing ? 'var(--color-warning-bg)' : isDone ? 'var(--color-success-bg)' : 'var(--color-danger-bg)',
+                        color: isProcessing ? 'var(--color-warning)' : isDone ? 'var(--color-success)' : 'var(--color-danger)',
                       }}>
                         {isProcessing ? '转码中' : isDone ? '✓ 就绪' : '失败'}
                       </span>
@@ -264,13 +265,13 @@ export function UploadCenterPage() {
                     {/* 信息 */}
                     <div style={{ padding: '8px 10px', flex: 1 }}>
                       <div style={{
-                        fontSize: 12, fontWeight: 500, color: '#1f2329',
+                        fontSize: 12, fontWeight: 500, color: 'var(--color-text)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}>{h.name}</div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 11, color: '#86909c' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
                         <span>{h.ext.toUpperCase()} · {humanSize(h.size)}</span>
                       </div>
-                      <div style={{ fontSize: 10, color: '#c9cdd4', marginTop: 2 }}>
+                      <div style={{ fontSize: 10, color: 'var(--color-text-placeholder)', marginTop: 2 }}>
                         {formatTime(h.createdAt)}
                       </div>
                     </div>

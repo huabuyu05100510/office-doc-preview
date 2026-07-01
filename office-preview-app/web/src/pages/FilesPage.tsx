@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // FilesPage — 文档预览（大厂视觉重写）
 // 模型：claude-sonnet-4-6
 import { useEffect, useMemo, useState } from 'react'
@@ -63,7 +64,7 @@ export function FilesPage() {
       {/* Page header */}
       <div className="oa-page-header">
         <h1 className="oa-page-title">
-          <FileTextIcon size={24} style={{ color: '#1677ff' }} />
+          <FileTextIcon size={24} style={{ color: 'var(--color-primary)' }} />
           文档预览
         </h1>
         <div className="oa-page-subtitle">
@@ -80,17 +81,17 @@ export function FilesPage() {
         </div>
         <div className="oa-stat-card">
           <div className="oa-stat-label">待转码</div>
-          <div className="oa-stat-value" style={{ color: '#1677ff' }}>{convertingCount}</div>
+          <div className="oa-stat-value" style={{ color: 'var(--color-primary)' }}>{convertingCount}</div>
           <div className="oa-stat-delta">实时轮询</div>
         </div>
         <div className="oa-stat-card">
           <div className="oa-stat-label">已就绪</div>
-          <div className="oa-stat-value" style={{ color: '#52c41a' }}>{readyCount}</div>
+          <div className="oa-stat-value" style={{ color: 'var(--color-success)' }}>{readyCount}</div>
           <div className="oa-stat-delta">可立即预览</div>
         </div>
         <div className="oa-stat-card">
           <div className="oa-stat-label">失败</div>
-          <div className="oa-stat-value" style={{ color: failedCount > 0 ? '#ff4d4f' : '#1f2329' }}>{failedCount}</div>
+          <div className="oa-stat-value" style={{ color: failedCount > 0 ? 'var(--color-danger)' : 'var(--color-text)' }}>{failedCount}</div>
           <div className="oa-stat-delta">{failedCount > 0 ? '需要重试' : '全部正常'}</div>
         </div>
       </div>
@@ -101,11 +102,11 @@ export function FilesPage() {
       {/* Filter bar */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16,
-        background: '#fff', padding: 12, borderRadius: 8, border: '1px solid #e5e7eb',
+        background: '#fff', padding: 12, borderRadius: 8, border: '1px solid var(--color-border-light)',
       }}>
         <div style={{ position: 'relative', flex: 1, maxWidth: 320 }}>
           <SearchIcon size={16} style={{
-            position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#86909c',
+            position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-tertiary)',
           }} />
           <input
             type="search"
@@ -114,11 +115,11 @@ export function FilesPage() {
             onChange={e => setQuery(e.target.value)}
             style={{
               width: '100%', height: 32, paddingLeft: 36, paddingRight: 12,
-              background: '#fafafa', border: '1px solid transparent', borderRadius: 6,
+              background: 'var(--color-bg-subtle)', border: '1px solid transparent', borderRadius: 6,
               outline: 'none', fontSize: 14,
             }}
-            onFocus={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#1677ff' }}
-            onBlur={e => { e.currentTarget.style.background = '#fafafa'; e.currentTarget.style.borderColor = 'transparent' }}
+            onFocus={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = 'var(--color-primary)' }}
+            onBlur={e => { e.currentTarget.style.background = 'var(--color-bg-subtle)'; e.currentTarget.style.borderColor = 'transparent' }}
           />
         </div>
         <div className="oa-tabs" style={{ borderBottom: 'none' }}>
@@ -138,7 +139,7 @@ export function FilesPage() {
             </button>
           ))}
         </div>
-        <div style={{ marginLeft: 'auto', fontSize: 13, color: '#86909c' }}>
+        <div style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--color-text-tertiary)' }}>
           {filtered.length} 个文件
         </div>
       </div>

@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // TranslationPage — 智能翻译（大厂视觉重写）
 // 模型：claude-sonnet-4-6
 // 布局：使用 xf-workspace（左侧子菜单 + 内容区），统一 QualityCheckPage 风格
@@ -298,13 +299,13 @@ function RealtimeTranslateMode() {
             ⚡ {engine} · {ms}ms · {pairs.length} 对齐
           </span>
         )}
-        <div data-testid="rt-view-mode" style={{ display: 'flex', gap: 2, marginLeft: 12, border: '1px solid #d9d9d9', borderRadius: 4, overflow: 'hidden' }}>
+        <div data-testid="rt-view-mode" style={{ display: 'flex', gap: 2, marginLeft: 12, border: '1px solid var(--color-border)', borderRadius: 4, overflow: 'hidden' }}>
           <button
             data-testid="rt-view-mode-word"
             onClick={() => setViewMode('word')}
             style={{
               padding: '2px 10px', fontSize: 12, border: 'none', cursor: 'pointer',
-              background: viewMode === 'word' ? '#1677ff' : 'transparent',
+              background: viewMode === 'word' ? 'var(--color-primary)' : 'transparent',
               color: viewMode === 'word' ? '#fff' : 'var(--xf-text-secondary)',
             }}
           >词级</button>
@@ -313,7 +314,7 @@ function RealtimeTranslateMode() {
             onClick={() => setViewMode('paragraph')}
             style={{
               padding: '2px 10px', fontSize: 12, border: 'none', cursor: 'pointer',
-              background: viewMode === 'paragraph' ? '#1677ff' : 'transparent',
+              background: viewMode === 'paragraph' ? 'var(--color-primary)' : 'transparent',
               color: viewMode === 'paragraph' ? '#fff' : 'var(--xf-text-secondary)',
             }}
           >段落</button>
@@ -347,7 +348,7 @@ function RealtimeTranslateMode() {
         <div className="xf-error-list" data-testid="rt-align-pane">
           {/* 译文 token 区（可点击标注） */}
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--xf-border-light)', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <BoltIcon size={14} style={{ color: '#722ed1' }} />
+            <BoltIcon size={14} style={{ color: 'var(--color-ai)' }} />
             <span style={{ fontWeight: 600, fontSize: 13 }}>
               {viewMode === 'word' ? '实时译文 · 词级对齐' : '实时译文 · 段落对照'}
             </span>
@@ -388,8 +389,8 @@ function RealtimeTranslateMode() {
                     style={{
                       padding: 10, fontSize: 13, lineHeight: 1.7,
                       borderBottom: '1px solid var(--xf-border-light)',
-                      background: effectiveSrcPara === i ? '#fff7e6' : 'transparent',
-                      borderLeft: effectiveSrcPara === i ? '3px solid #faad14' : '3px solid transparent',
+                      background: effectiveSrcPara === i ? 'var(--color-warning-bg)' : 'transparent',
+                      borderLeft: effectiveSrcPara === i ? '3px solid var(--color-warning)' : '3px solid transparent',
                       transition: 'all 120ms', cursor: 'pointer',
                     }}
                   >{p}</div>
@@ -421,8 +422,8 @@ function RealtimeTranslateMode() {
                     style={{
                       padding: 10, fontSize: 13, lineHeight: 1.7, color: 'var(--xf-primary)',
                       borderBottom: '1px solid var(--xf-border-light)',
-                      background: effectiveTgtPara === i ? '#fff7e6' : 'transparent',
-                      borderRight: effectiveTgtPara === i ? '3px solid #faad14' : '3px solid transparent',
+                      background: effectiveTgtPara === i ? 'var(--color-warning-bg)' : 'transparent',
+                      borderRight: effectiveTgtPara === i ? '3px solid var(--color-warning)' : '3px solid transparent',
                       transition: 'all 120ms', cursor: 'pointer',
                     }}
                   >{p}</div>
@@ -448,8 +449,8 @@ function RealtimeTranslateMode() {
                   style={{
                     display: 'inline-block', marginRight: 4, marginBottom: 4,
                     padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
-                    background: highlightedSrc.has(i) ? '#fff7e6' : 'var(--xf-bg-subtle)',
-                    border: highlightedSrc.has(i) ? '1px solid #faad14' : '1px solid transparent',
+                    background: highlightedSrc.has(i) ? 'var(--color-warning-bg)' : 'var(--xf-bg-subtle)',
+                    border: highlightedSrc.has(i) ? '1px solid var(--color-warning)' : '1px solid transparent',
                     color: 'var(--xf-text)', transition: 'all 120ms',
                   }}
                 >{tk}</span>
@@ -472,8 +473,8 @@ function RealtimeTranslateMode() {
                   style={{
                     display: 'inline-block', marginRight: 4, marginBottom: 4,
                     padding: '2px 6px', borderRadius: 4,
-                    background: highlightedTgt.has(i) ? '#f6ffed' : 'var(--xf-primary-bg)',
-                    border: highlightedTgt.has(i) ? '1px solid #52c41a' : '1px solid transparent',
+                    background: highlightedTgt.has(i) ? 'var(--color-success-bg)' : 'var(--xf-primary-bg)',
+                    border: highlightedTgt.has(i) ? '1px solid var(--color-success)' : '1px solid transparent',
                     color: 'var(--xf-primary)', transition: 'all 120ms',
                   }}
                 >{tk}</span>
@@ -548,7 +549,7 @@ function RealtimeTranslateMode() {
                       onClick={() => setPopupRating(n)}
                       style={{
                         width: 32, height: 32, border: 'none', background: 'transparent',
-                        cursor: 'pointer', fontSize: 20, color: n <= popupRating ? '#faad14' : '#d9d9d9',
+                        cursor: 'pointer', fontSize: 20, color: n <= popupRating ? 'var(--color-warning)' : 'var(--color-border)',
                       }}
                     >★</button>
                   ))}
@@ -557,7 +558,7 @@ function RealtimeTranslateMode() {
                   placeholder="反馈说明（可选）"
                   value={popupComment}
                   onChange={e => setPopupComment(e.target.value)}
-                  style={{ width: '100%', marginTop: 12, minHeight: 80, padding: 8, borderRadius: 6, border: '1px solid #d9d9d9', fontSize: 13, resize: 'vertical' }}
+                  style={{ width: '100%', marginTop: 12, minHeight: 80, padding: 8, borderRadius: 6, border: '1px solid var(--color-border)', fontSize: 13, resize: 'vertical' }}
                 />
               </div>
             )}
@@ -569,7 +570,7 @@ function RealtimeTranslateMode() {
                   placeholder="输入您认为更好的翻译…"
                   value={popupAlt}
                   onChange={e => setPopupAlt(e.target.value)}
-                  style={{ width: '100%', minHeight: 100, padding: 8, borderRadius: 6, border: '1px solid #d9d9d9', fontSize: 13, resize: 'vertical' }}
+                  style={{ width: '100%', minHeight: 100, padding: 8, borderRadius: 6, border: '1px solid var(--color-border)', fontSize: 13, resize: 'vertical' }}
                 />
               </div>
             )}
@@ -588,7 +589,7 @@ function RealtimeTranslateMode() {
                 disabled={popupKind === 'alt_trans' && !popupAlt.trim()}
                 style={{
                   padding: '6px 16px', borderRadius: 6, border: 'none',
-                  background: popupKind === 'alt_trans' && !popupAlt.trim() ? '#d9d9d9' : '#1677ff',
+                  background: popupKind === 'alt_trans' && !popupAlt.trim() ? 'var(--color-border)' : 'var(--color-primary)',
                   color: '#fff', cursor: 'pointer', fontSize: 13,
                 }}
               >提交反馈</button>
@@ -612,10 +613,10 @@ function kindLabel(kind: string): string {
 }
 
 function kindColor(kind: string): string {
-  if (kind === 'align_fix') return '#722ed1'
-  if (kind === 'seg_rating') return '#faad14'
-  if (kind === 'alt_trans') return '#52c41a'
-  return '#86909c'
+  if (kind === 'align_fix') return 'var(--color-ai)'
+  if (kind === 'seg_rating') return 'var(--color-warning)'
+  if (kind === 'alt_trans') return 'var(--color-success)'
+  return 'var(--color-text-tertiary)'
 }
 
 function annotationSummary(a: Annotation): string {
@@ -800,21 +801,21 @@ function TextTranslateMode() {
                       style={{
                         display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0,
                         borderBottom: i < result.length - 1 ? '1px solid var(--xf-border-light)' : 'none',
-                        background: isHovered ? '#fff7e6' : 'transparent',
+                        background: isHovered ? 'var(--color-warning-bg)' : 'transparent',
                         transition: 'background 120ms',
                       }}
                     >
                       <div data-testid={`text-compare-src-${i}`} style={{
                         padding: 12, borderRight: '1px solid var(--xf-border-light)',
                         fontSize: 13, lineHeight: 1.7,
-                        borderLeft: isHovered ? '3px solid #faad14' : '3px solid transparent',
+                        borderLeft: isHovered ? '3px solid var(--color-warning)' : '3px solid transparent',
                       }}>
                         {seg.source}
                       </div>
                       <div data-testid={`text-compare-tgt-${i}`} style={{
-                        padding: 12, background: isHovered ? '#fff7e6' : 'var(--xf-primary-bg)',
+                        padding: 12, background: isHovered ? 'var(--color-warning-bg)' : 'var(--xf-primary-bg)',
                         fontSize: 13, lineHeight: 1.7, color: 'var(--xf-primary)',
-                        borderRight: isHovered ? '3px solid #faad14' : '3px solid transparent',
+                        borderRight: isHovered ? '3px solid var(--color-warning)' : '3px solid transparent',
                       }}>
                         {seg.target}
                       </div>

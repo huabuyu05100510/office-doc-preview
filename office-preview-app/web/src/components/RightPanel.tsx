@@ -1,7 +1,9 @@
 // RightPanel — 右侧工具栏（任务列表 + 系统状态）
 // 模型：claude-sonnet-4-6
 import React from 'react'
-import { TaskIcon, ClockIcon, AlertCircleIcon, CheckCircleIcon } from '../design/icons'
+import { useNavigate } from 'react-router-dom'
+import { TaskIcon, ClockIcon, AlertCircleIcon, CheckCircleIcon, ChevronRightIcon } from '../design/icons'
+import { useStore } from '../store'
 
 export interface RightTaskItem {
   id: string
@@ -16,7 +18,7 @@ export interface RightPanelProps {
   tasks?: RightTaskItem[]
   /** 选中任务 id */
   selectedTaskId?: string | null
-  /** 点击任务回调 */
+  /** 点击任务回调（若提供则优先使用；否则内部 useNavigate） */
   onSelectTask?: (taskId: string) => void
   /** AI 健康状态 */
   health?: {
@@ -51,6 +53,25 @@ const STATUS_LABEL: Record<string, string> = {
 export const RightPanel: React.FC<RightPanelProps> = ({
   tasks = [], selectedTaskId, onSelectTask, health,
 }) => {
+  const navigate = useNavigate()
+  const select = useStore(s => s.select)
+  const handleSelectTask = (taskId: string) => {
+    if (onSelectTask) {
+      onSelectTask(taskId)
+      return
+    }
+    const ts = new Date().toISOString()
+    console.info(`[rightpanel ${ts}] selectTask:`, taskId)
+    // 设置 store 中 active task 并跳转 /files?task=<id>
+    const t = useStore.getState().tasks.find(x => x.id === taskId)
+    if (t) select(t)
+    navigate(`/files?task=${encodeURIComponent(taskId)}`)
+  }
+  const handleViewAll = () => {
+    const ts = new Date().toISOString()
+    console.info(`[rightpanel ${ts}] viewAll → /files`)
+    navigate('/files')
+  }
   return (
     <aside className="oa-right-panel" aria-label="任务与状态" style={{
       gridArea: 'rightpanel',
@@ -88,7 +109,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                 <button
                   key={t.id}
                   type="button"
-                  onClick={() => onSelectTask?.(t.id)}
+                  onClick={() => handleSelectTask(t.id)}
                   style={{
                     display: 'flex', alignItems: 'flex-start', gap: 8,
                     padding: 8, borderRadius: 6, textAlign: 'left',
@@ -123,6 +144,23 @@ export const RightPanel: React.FC<RightPanelProps> = ({
               )
             })}
           </div>
+        )}
+        {tasks.length > 0 && (
+          <button
+            type="button"
+            data-testid="rightpanel-view-all"
+            onClick={handleViewAll}
+            style={{
+              marginTop: 8, padding: '6px 8px',
+              background: 'transparent', border: '1px dashed #d9d9d9',
+              borderRadius: 6, color: '#1677ff', fontSize: 12,
+              cursor: 'pointer', display: 'flex', alignItems: 'center',
+              justifyContent: 'center', gap: 4,
+            }}
+          >
+            查看全部
+            <ChevronRightIcon size={12} />
+          </button>
         )}
       </div>
 

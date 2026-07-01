@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // ConversionZone — 格式转换工作区：上传→转码→多格式预览（PDF / 图片+文字 / 复制文字）
 // 模型：claude-sonnet-4-6
 //
@@ -169,7 +170,7 @@ export function ConversionZone() {
             <div className="upload-title" style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>
               格式转换
             </div>
-            <div className="upload-sub" style={{ maxWidth: 420, margin: '0 auto', lineHeight: 1.6, color: '#86909c' }}>
+            <div className="upload-sub" style={{ maxWidth: 420, margin: '0 auto', lineHeight: 1.6, color: 'var(--color-text-tertiary)' }}>
               拖拽或点击上传 Office 文档 · PDF · 图片，自动转为 PDF + 高清图片，文字层精准对齐、可选中复制
             </div>
           </div>
@@ -190,14 +191,14 @@ export function ConversionZone() {
         {/* 头部 */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px',
-          borderBottom: '1px solid #f0f1f3', background: '#fafbfc',
+          borderBottom: '1px solid var(--color-border-light)', background: 'var(--color-bg)',
         }}>
-          <span style={{ fontSize: 16, fontWeight: 600, color: '#1f2329' }}>格式转换</span>
+          <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-text)' }}>格式转换</span>
           <div style={{ display: 'flex', gap: 12, fontSize: 13 }}>
-            {uploadingCount > 0 && <span style={{ color: '#1677ff' }}>上传 {uploadingCount}</span>}
-            {convertingCount > 0 && <span style={{ color: '#faad14' }}>转码 {convertingCount}</span>}
-            {doneCount > 0 && <span style={{ color: '#52c41a' }}>完成 {doneCount}</span>}
-            {failedCount > 0 && <span style={{ color: '#ff4d4f' }}>失败 {failedCount}</span>}
+            {uploadingCount > 0 && <span style={{ color: 'var(--color-primary)' }}>上传 {uploadingCount}</span>}
+            {convertingCount > 0 && <span style={{ color: 'var(--color-warning)' }}>转码 {convertingCount}</span>}
+            {doneCount > 0 && <span style={{ color: 'var(--color-success)' }}>完成 {doneCount}</span>}
+            {failedCount > 0 && <span style={{ color: 'var(--color-danger)' }}>失败 {failedCount}</span>}
           </div>
           <div style={{ flex: 1 }} />
           <button
@@ -239,14 +240,14 @@ function QueueItem({ item, expanded, onToggle, onPreview }: {
   item: UploadItem; expanded: boolean; onToggle: () => void; onPreview: (t: Task) => void
 }) {
   return (
-    <div style={{ borderBottom: '1px solid #f5f6f7' }}>
+    <div style={{ borderBottom: '1px solid var(--color-bg-canvas)' }}>
       {/* 主行 */}
       <div
         onClick={onToggle}
         style={{
           display: 'flex', alignItems: 'center', gap: 12, padding: '14px 20px',
           cursor: 'pointer', transition: 'background 120ms',
-          background: expanded ? '#f0f5ff' : 'transparent',
+          background: expanded ? 'var(--color-primary-bg)' : 'transparent',
         }}
       >
         {/* 状态图标 */}
@@ -255,17 +256,17 @@ function QueueItem({ item, expanded, onToggle, onPreview }: {
         {/* 文件信息 */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 14, fontWeight: 500, color: '#1f2329', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {item.name}
             </span>
             <span style={{
               fontSize: 11, padding: '1px 6px', borderRadius: 3,
-              background: '#f0f1f3', color: '#86909c', fontWeight: 500, flexShrink: 0,
+              background: 'var(--color-border-light)', color: 'var(--color-text-tertiary)', fontWeight: 500, flexShrink: 0,
             }}>
               {item.ext.toUpperCase()}
             </span>
           </div>
-          <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
             {humanSize(item.size)}
             {item.status === 'uploading' && ` · 上传 ${Math.round(item.pct * 100)}%`}
             {item.status === 'converting' && ` · 转码 ${Math.round(item.pct * 100)}%`}
@@ -277,14 +278,14 @@ function QueueItem({ item, expanded, onToggle, onPreview }: {
         {/* 进度条 */}
         {(item.status === 'uploading' || item.status === 'converting') && (
           <div style={{ width: 120, flexShrink: 0 }}>
-            <div style={{ width: '100%', height: 4, background: '#f0f1f3', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ width: '100%', height: 4, background: 'var(--color-border-light)', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{
                 width: `${item.pct * 100}%`, height: '100%',
-                background: item.status === 'uploading' ? '#1677ff' : '#52c41a',
+                background: item.status === 'uploading' ? 'var(--color-primary)' : 'var(--color-success)',
                 borderRadius: 2, transition: 'width 300ms ease',
               }} />
             </div>
-            <div style={{ fontSize: 11, color: '#86909c', textAlign: 'right', marginTop: 2 }}>
+            <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right', marginTop: 2 }}>
               {Math.round(item.pct * 100)}%
             </div>
           </div>
@@ -300,7 +301,7 @@ function QueueItem({ item, expanded, onToggle, onPreview }: {
           </button>
         )}
         {item.status === 'done' && (
-          <span style={{ fontSize: 20, color: expanded ? '#1677ff' : '#c9cdd4', transition: 'transform 200ms', transform: expanded ? 'rotate(180deg)' : '' }}>
+          <span style={{ fontSize: 20, color: expanded ? 'var(--color-primary)' : 'var(--color-text-placeholder)', transition: 'transform 200ms', transform: expanded ? 'rotate(180deg)' : '' }}>
             ▾
           </span>
         )}
@@ -322,13 +323,13 @@ function StatusIcon({ status }: { status: UploadItem['status'] }) {
   }
   switch (status) {
     case 'uploading':
-      return <span style={{ ...style, background: '#e6f4ff', color: '#1677ff' }}>⏳</span>
+      return <span style={{ ...style, background: 'var(--color-primary-bg)', color: 'var(--color-primary)' }}>⏳</span>
     case 'converting':
-      return <span style={{ ...style, background: '#fff7e6', color: '#faad14' }}>⚙️</span>
+      return <span style={{ ...style, background: 'var(--color-warning-bg)', color: 'var(--color-warning)' }}>⚙️</span>
     case 'done':
-      return <span style={{ ...style, background: '#f6ffed', color: '#52c41a' }}>✅</span>
+      return <span style={{ ...style, background: 'var(--color-success-bg)', color: 'var(--color-success)' }}>✅</span>
     case 'failed':
-      return <span style={{ ...style, background: '#fff1f0', color: '#ff4d4f' }}>❌</span>
+      return <span style={{ ...style, background: 'var(--color-danger-bg)', color: 'var(--color-danger)' }}>❌</span>
   }
 }
 
@@ -339,7 +340,7 @@ function ConversionDetail({ task, onPreview }: { task: Task; onPreview: (t: Task
   const hasImages = pages.length > 0
 
   return (
-    <div style={{ padding: '0 20px 16px 20px', background: '#fafbfc' }}>
+    <div style={{ padding: '0 20px 16px 20px', background: 'var(--color-bg)' }}>
       {/* 产物摘要 */}
       <div style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
@@ -347,13 +348,13 @@ function ConversionDetail({ task, onPreview }: { task: Task; onPreview: (t: Task
       }}>
         {/* PDF 产物 */}
         <div style={{
-          background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+          background: '#fff', border: '1px solid var(--color-border-light)', borderRadius: 8,
           padding: 16, display: 'flex', alignItems: 'center', gap: 12,
         }}>
           <span style={{ fontSize: 24 }}>📕</span>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: '#1f2329' }}>PDF 预览</div>
-            <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text)' }}>PDF 预览</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
               {task.previewSize ? humanSize(task.previewSize) : task.ext === 'pdf' ? humanSize(task.size) : '转码产物'}
             </div>
             <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
@@ -380,13 +381,13 @@ function ConversionDetail({ task, onPreview }: { task: Task; onPreview: (t: Task
         {/* 图片产物 */}
         {hasImages && (
           <div style={{
-            background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+            background: '#fff', border: '1px solid var(--color-border-light)', borderRadius: 8,
             padding: 16, display: 'flex', alignItems: 'center', gap: 12,
           }}>
             <span style={{ fontSize: 24 }}>🖼️</span>
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#1f2329' }}>图片+文字</div>
-              <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text)' }}>图片+文字</div>
+              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
                 {pages.length} 页 · 文字可选中复制
               </div>
             </div>
@@ -395,17 +396,17 @@ function ConversionDetail({ task, onPreview }: { task: Task; onPreview: (t: Task
 
         {/* 统计 */}
         <div style={{
-          background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+          background: '#fff', border: '1px solid var(--color-border-light)', borderRadius: 8,
           padding: 16, display: 'flex', alignItems: 'center', gap: 12,
         }}>
           <span style={{ fontSize: 24 }}>📊</span>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: '#1f2329' }}>文件信息</div>
-            <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text)' }}>文件信息</div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 2 }}>
               {humanSize(task.size)} · {task.ext.toUpperCase()}
               {task.convertDurationMs && ` · ${(task.convertDurationMs / 1000).toFixed(1)}s 转码`}
             </div>
-            <div style={{ fontSize: 12, color: '#52c41a', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--color-success)', marginTop: 4 }}>
               文字层 {task.textDone || pages.length}/{pages.length} 页 · 可扫描 · 可翻译
             </div>
           </div>
@@ -415,7 +416,7 @@ function ConversionDetail({ task, onPreview }: { task: Task; onPreview: (t: Task
       {/* 页面缩略图预览 */}
       {pages.length > 0 && (
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#4e5969', marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
             页面预览（{pages.length} 页）
           </div>
           <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
@@ -423,8 +424,8 @@ function ConversionDetail({ task, onPreview }: { task: Task; onPreview: (t: Task
               <div
                 key={p.page}
                 style={{
-                  flexShrink: 0, width: 120, border: '1px solid #e5e7eb',
-                  borderRadius: 6, overflow: 'hidden', background: '#fafafa',
+                  flexShrink: 0, width: 120, border: '1px solid var(--color-border-light)',
+                  borderRadius: 6, overflow: 'hidden', background: 'var(--color-bg-subtle)',
                   cursor: 'pointer',
                 }}
                 onClick={() => onPreview(task)}
@@ -438,7 +439,7 @@ function ConversionDetail({ task, onPreview }: { task: Task; onPreview: (t: Task
                 />
                 <div style={{
                   textAlign: 'center', padding: '4px 8px', fontSize: 11,
-                  color: '#86909c', borderTop: '1px solid #f0f1f3',
+                  color: 'var(--color-text-tertiary)', borderTop: '1px solid var(--color-border-light)',
                 }}>
                   第 {p.page} 页
                   {p.textUrl && ' · 文字✓'}

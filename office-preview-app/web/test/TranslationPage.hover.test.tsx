@@ -44,9 +44,9 @@ describe('TranslationPage TextTranslateMode: 前后对比 + hover 联动', () =>
     fireEvent.mouseEnter(screen.getByTestId('text-compare-row-0'))
     await waitFor(() => {
       const row = screen.getByTestId('text-compare-row-0') as HTMLElement
-      expect(row.style.background).toBe('rgb(255, 247, 230)')  // #fff7e6
+      expect(row.style.background).toBe('var(--color-warning-bg)')  // #fff7e6
       const src = screen.getByTestId('text-compare-src-0') as HTMLElement
-      expect(src.style.borderLeft).toContain('rgb(250, 173, 20)')  // #faad14
+      expect(src.style.borderLeft).toContain('var(--color-warning)')  // #faad14
     })
     // mouse leave 后应恢复
     fireEvent.mouseLeave(screen.getByTestId('text-compare-row-0'))

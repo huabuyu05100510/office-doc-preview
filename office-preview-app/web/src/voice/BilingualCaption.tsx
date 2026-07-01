@@ -1,5 +1,6 @@
 // BilingualCaption — 双语对照字幕（对标 Google Translate Voice Mode / Otter.ai）
 // 模型：claude-sonnet-4-6
+// 颜色迁移至 semantic.ts (Phase 2.A)
 import React from 'react'
 import { VolumeIcon } from '../design/icons'
 
@@ -29,8 +30,8 @@ export const BilingualCaption: React.FC<BilingualCaptionProps> = ({
         <div
           key={item.id}
           style={{
-            background: '#fff',
-            border: '1px solid var(--xf-border-light, #f0f0f0)',
+            background: 'var(--color-bg)',
+            border: '1px solid var(--color-border-light)',
             borderRadius: 10,
             padding: 14,
             display: 'flex',
@@ -40,15 +41,15 @@ export const BilingualCaption: React.FC<BilingualCaptionProps> = ({
             animation: 'xf-cap-in 0.3s ease-out',
           }}
         >
-          <div style={{ fontSize: 11, color: 'var(--xf-text-tertiary, #86909c)', display: 'flex', gap: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'flex', gap: 8 }}>
             <span>{new Date(item.ts).toLocaleTimeString()}</span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' }}>
             <div>
-              <div style={{ fontSize: 10, color: 'var(--xf-text-tertiary, #86909c)', marginBottom: 4, letterSpacing: 1 }}>
+              <div style={{ fontSize: 10, color: 'var(--color-text-tertiary)', marginBottom: 4, letterSpacing: 1 }}>
                 {sourceLangLabel.toUpperCase()}
               </div>
-              <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--xf-text, #1f2329)' }}>
+              <div style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--color-text)' }}>
                 {item.source}
               </div>
             </div>
@@ -56,7 +57,7 @@ export const BilingualCaption: React.FC<BilingualCaptionProps> = ({
               <div
                 style={{
                   fontSize: 10, marginBottom: 4, letterSpacing: 1,
-                  color: '#722ed1', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  color: 'var(--color-ai)', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 }}
               >
                 <span>{targetLangLabel.toUpperCase()}</span>
@@ -65,7 +66,7 @@ export const BilingualCaption: React.FC<BilingualCaptionProps> = ({
                     onClick={() => onSpeak(item.target, 'target')}
                     title="朗读译文"
                     style={{
-                      border: 'none', background: 'transparent', color: '#722ed1',
+                      border: 'none', background: 'transparent', color: 'var(--color-ai)',
                       cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center',
                     }}
                   >
@@ -76,7 +77,7 @@ export const BilingualCaption: React.FC<BilingualCaptionProps> = ({
               <div
                 style={{
                   fontSize: 15, lineHeight: 1.7,
-                  color: item.translating ? '#b37feb' : 'var(--xf-text, #1f2329)',
+                  color: item.translating ? 'var(--purple-4)' : 'var(--color-text)',
                   fontStyle: item.translating ? 'italic' : 'normal',
                 }}
               >
@@ -97,11 +98,11 @@ export const BilingualCaption: React.FC<BilingualCaptionProps> = ({
             opacity: 0.7,
           }}
         >
-          <div style={{ fontSize: 10, color: '#1677ff', marginBottom: 6, letterSpacing: 1 }}>实时识别中…</div>
-          <div style={{ fontSize: 14, lineHeight: 1.6, color: '#1f2329' }}>
+          <div style={{ fontSize: 10, color: 'var(--color-primary)', marginBottom: 6, letterSpacing: 1 }}>实时识别中…</div>
+          <div style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--color-text)' }}>
             {interimSource}
             {interimTarget && (
-              <span style={{ color: '#722ed1', marginLeft: 8 }}>→ {interimTarget}</span>
+              <span style={{ color: 'var(--color-ai)', marginLeft: 8 }}>→ {interimTarget}</span>
             )}
           </div>
         </div>

@@ -20,6 +20,7 @@ import { listTemplates, getTemplate, createTemplate, deleteTemplate } from './oc
 import { recognizeByTemplate, recognizeGeneral } from './baidu-iocr.mjs'
 import { matchTemplate } from './template-matcher.mjs'
 import { generateSearchablePdf } from './ocr-pdf.mjs'
+import { listEntries, appendEntry, removeEntry, clearEntries } from './workspace-timeline.mjs'
 
 function sendJSON(res, code, data) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -771,6 +772,27 @@ async function handleRoute(req, res, url, pathname) {
   }
   if (pathname === '/api/translate/annotation' && req.method === 'DELETE') {
     return await handleAnnotationDelete(req, res, url)
+  }
+
+  // ============ Workspace Timeline 时间线 ============
+  // POST /api/workspace/timeline — 追加条目
+  if (pathname === '/api/workspace/timeline' && req.method === 'POST') {
+    return await handleTimelineAppend(req, res)
+  }
+  // POST /api/workspace/timeline/clear — 清空
+  if (pathname === '/api/workspace/timeline/clear' && req.method === 'POST') {
+    return await handleTimelineClear(req, res)
+  }
+  // GET /api/workspace/timeline?limit=&kind=
+  if (pathname === '/api/workspace/timeline' && req.method === 'GET') {
+    return await handleTimelineList(req, res, url)
+  }
+  // DELETE /api/workspace/timeline/:id
+  {
+    const tlMatch = pathname.match(/^\/api\/workspace\/timeline\/([\w-]+)$/)
+    if (tlMatch && req.method === 'DELETE') {
+      return await handleTimelineRemove(req, res, tlMatch[1])
+    }
   }
 
   // OCR 模板 CRUD
@@ -2013,5 +2035,79 @@ async function handleVoiceTranslate(req, res) {
     console.error('[voice/translate] failed:', e.message)
     if (e instanceof SpeechError) return sendJSON(res, e.statusCode, { error: e.message })
     if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * ============ Workspace Timeline 时间线 ============
+ * 设计要点（见 workspace-timeline.mjs 顶部注释）：
+ *   - 每用户 JSONL，userId 取自 x-user-id header，缺省 'anonymous'
+ *   - 上限 200 条 + 单文件 10000 行 rotation
+ *   - 全部可观测：ISO 时间戳 + X-Timeline-* 响应头
+ */
+
+function userIdFromReq(req) {
+  const h = req.headers['x-user-id']
+  if (typeof h === 'string' && h.trim()) return h.trim().slice(0, 64)
+  return 'anonymous'
+}
+
+async function handleTimelineAppend(req, res) {
+  try {
+    const body = await readBody(req, 8 * 1024)
+    const input = parseJSONBody(body)
+    const userId = userIdFromReq(req)
+    const entry = appendEntry({ ...input, userId })
+    res.setHeader('X-Timeline-Id', entry.id)
+    res.setHeader('X-Timeline-Kind', entry.kind)
+    return sendJSON(res, 200, { ok: true, entry })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (/invalid kind|summary required|too long/i.test(e.message)) {
+      return sendJSON(res, 400, { error: e.message })
+    }
+    console.error('[workspace-timeline] append failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+async function handleTimelineList(req, res, url) {
+  try {
+    const userId = userIdFromReq(req)
+    const kind = url.searchParams.get('kind') || undefined
+    const limit = Number(url.searchParams.get('limit') || 50)
+    const entries = listEntries({ userId, kind, limit })
+    res.setHeader('X-Timeline-Count', String(entries.length))
+    if (kind) res.setHeader('X-Timeline-Kind', kind)
+    return sendJSON(res, 200, { entries })
+  } catch (e) {
+    console.error('[workspace-timeline] list failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+async function handleTimelineRemove(req, res, id) {
+  try {
+    const userId = userIdFromReq(req)
+    const ok = removeEntry({ userId, id })
+    if (!ok) return sendJSON(res, 404, { error: 'timeline entry not found' })
+    res.setHeader('X-Timeline-Removed-Id', id)
+    return sendJSON(res, 200, { ok: true, id })
+  } catch (e) {
+    if (/id required/i.test(e.message)) return sendJSON(res, 400, { error: e.message })
+    console.error('[workspace-timeline] remove failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+async function handleTimelineClear(req, res) {
+  try {
+    const userId = userIdFromReq(req)
+    const r = clearEntries({ userId })
+    res.setHeader('X-Timeline-Cleared', String(r.cleared))
+    return sendJSON(res, 200, r)
+  } catch (e) {
+    console.error('[workspace-timeline] clear failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
   }
 }

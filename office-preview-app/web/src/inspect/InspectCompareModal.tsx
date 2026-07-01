@@ -1,6 +1,7 @@
 // 双栏对比 / 智检 / 翻译双栏对照 — 顶层弹层（薄协调器）
 // 重构：对标设计稿 讯飞智检.png + 翻译对比.png
 // 模型：claude-sonnet-4-6
+// Phase 2.A: 迁移至 Modal primitive（bare 模式）保留 .inspect-compare-modal / .icm-* 原 CSS
 //
 // 职责：弹层壳 + 工具栏 + mode 切换 + diff 数据加载 + 委托子组件渲染
 // 子组件：InspectView（智检） / DualLayout（双栏对比） / TranslationLayout（翻译双栏对照）
@@ -12,6 +13,7 @@ import { TranslationLayout } from './TranslationLayout'
 import { extractText } from './text-extract'
 import { EDIT_TOOLS } from './constants'
 import { useStore } from '../store'
+import { Modal, type ModalCloseReason } from '../components/Modal'
 
 interface Props {
   open: boolean
@@ -53,14 +55,6 @@ export function InspectCompareModal({ open, source, compare, onClose, defaultMod
   }, [mode, open])
   const [loadError, setLoadError] = useState<string | null>(null)
   const [diff, setDiff] = useState<InspectDiffResponse | null>(null)
-
-  // ESC 关闭
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [open, onClose])
 
   // 关闭时同步清理翻译状态
   useEffect(() => {
@@ -104,92 +98,105 @@ export function InspectCompareModal({ open, source, compare, onClose, defaultMod
     }
   }, [setMode, openTranslate, source])
 
+  const handleClose = useCallback((_reason: ModalCloseReason) => {
+    onClose()
+  }, [onClose])
+
   if (!open || !source) return null
 
   const totalErrors = diff?.errors.length ?? 0
 
   return (
-    <div className="inspect-compare-modal" data-testid="inspect-modal" role="dialog" aria-modal="true">
-      <div className="icm-mask" onClick={onClose} />
-      <div className="icm-body">
+    <Modal
+      open={open}
+      onClose={handleClose}
+      width="xl"
+      maskClosable={true}
+      bare
+      className="inspect-modal-host"
+    >
+      <div className="inspect-compare-modal" data-testid="inspect-modal">
+        <div className="icm-mask" onClick={() => onClose()} />
+        <div className="icm-body">
 
-        {/* ── 顶部工具条 ── */}
-        <header className="icm-toolbar" data-testid="inspect-toolbar">
-          <span className="icm-brand">讯飞智检</span>
+          {/* ── 顶部工具条 ── */}
+          <header className="icm-toolbar" data-testid="inspect-toolbar">
+            <span className="icm-brand">讯飞智检</span>
 
-          <div className="icm-mode-tabs" role="group" aria-label="对比模式">
-            <button
-              type="button"
-              className={`icm-tab ${mode === 'inspect' ? 'is-active' : ''}`}
-              aria-pressed={mode === 'inspect'}
-              onClick={() => handleModeChange('inspect')}
-            >智检</button>
-            <button
-              type="button"
-              className={`icm-tab ${mode === 'dual' ? 'is-active' : ''}`}
-              aria-pressed={mode === 'dual'}
-              onClick={() => handleModeChange('dual')}
-            >双栏对比</button>
-            <button
-              type="button"
-              className={`icm-tab ${mode === 'translate' ? 'is-active' : ''}`}
-              aria-pressed={mode === 'translate'}
-              onClick={() => handleModeChange('translate')}
-              data-testid="tab-translate"
-            >翻译对照</button>
-          </div>
-
-          <div className="icm-toolbar-right">
-            <button type="button" className="icm-btn-ghost">导出</button>
-            <button type="button" className="icm-btn-ghost">分享</button>
-            <button
-              type="button"
-              className="icm-btn-close"
-              onClick={onClose}
-              aria-label="关闭"
-              title="关闭"
-            >✕</button>
-          </div>
-        </header>
-
-        {/* ── 智检模式（委托 InspectView）── */}
-        {mode === 'inspect' && (
-          <InspectView diff={diff} loading={loading} loadError={loadError} onRetry={loadDiff} />
-        )}
-
-        {/* ── 双栏对比模式（委托 DualLayout）── */}
-        {mode === 'dual' && (
-          <DualLayout
-            source={source}
-            compare={compare}
-            diff={diff}
-            loading={loading}
-            loadError={loadError}
-            onRetry={loadDiff}
-          />
-        )}
-
-        {/* ── 翻译双栏对照模式（委托 TranslationLayout）── */}
-        {mode === 'translate' && (
-          <TranslationLayout />
-        )}
-
-        {/* ── 底部工具条 ── */}
-        <footer className="icm-edit-bar">
-          {mode === 'inspect' ? (
-            <div className="icm-edit-tools">
-              {EDIT_TOOLS.map((t, i) => (
-                <button key={i} type="button" className="icm-edit-btn">{t}</button>
-              ))}
+            <div className="icm-mode-tabs" role="group" aria-label="对比模式">
+              <button
+                type="button"
+                className={`icm-tab ${mode === 'inspect' ? 'is-active' : ''}`}
+                aria-pressed={mode === 'inspect'}
+                onClick={() => handleModeChange('inspect')}
+              >智检</button>
+              <button
+                type="button"
+                className={`icm-tab ${mode === 'dual' ? 'is-active' : ''}`}
+                aria-pressed={mode === 'dual'}
+                onClick={() => handleModeChange('dual')}
+              >双栏对比</button>
+              <button
+                type="button"
+                className={`icm-tab ${mode === 'translate' ? 'is-active' : ''}`}
+                aria-pressed={mode === 'translate'}
+                onClick={() => handleModeChange('translate')}
+                data-testid="tab-translate"
+              >翻译对照</button>
             </div>
-          ) : mode === 'translate' ? null : (
-            <span className="icm-footer-info">
-              {diff && `Myers diff · ${diff.ms}ms · ${totalErrors} 处差异`}
-            </span>
-          )}
-        </footer>
 
+            <div className="icm-toolbar-right">
+              <button type="button" className="icm-btn-ghost">导出</button>
+              <button type="button" className="icm-btn-ghost">分享</button>
+              <button
+                type="button"
+                className="icm-btn-close"
+                onClick={onClose}
+                aria-label="关闭"
+                title="关闭"
+              >✕</button>
+            </div>
+          </header>
+
+          {/* ── 智检模式（委托 InspectView）── */}
+          {mode === 'inspect' && (
+            <InspectView diff={diff} loading={loading} loadError={loadError} onRetry={loadDiff} />
+          )}
+
+          {/* ── 双栏对比模式（委托 DualLayout）── */}
+          {mode === 'dual' && (
+            <DualLayout
+              source={source}
+              compare={compare}
+              diff={diff}
+              loading={loading}
+              loadError={loadError}
+              onRetry={loadDiff}
+            />
+          )}
+
+          {/* ── 翻译双栏对照模式（委托 TranslationLayout）── */}
+          {mode === 'translate' && (
+            <TranslationLayout />
+          )}
+
+          {/* ── 底部工具条 ── */}
+          <footer className="icm-edit-bar">
+            {mode === 'inspect' ? (
+              <div className="icm-edit-tools">
+                {EDIT_TOOLS.map((t, i) => (
+                  <button key={i} type="button" className="icm-edit-btn">{t}</button>
+                ))}
+              </div>
+            ) : mode === 'translate' ? null : (
+              <span className="icm-footer-info">
+                {diff && `Myers diff · ${diff.ms}ms · ${totalErrors} 处差异`}
+              </span>
+            )}
+          </footer>
+
+        </div>
       </div>
-    </div>
+    </Modal>
   )
 }

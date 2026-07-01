@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // OCRPage — 讯飞 OCR 三模式（对标讯飞设计稿）
 // 模型：claude-sonnet-4-6
 // 布局：使用 xf-workspace（左侧子菜单 + 内容区），统一 QualityCheckPage 风格
@@ -243,7 +244,7 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
           onClick={handleExportPdf}
           disabled={!ocrResult || exporting}
           title="把当前图片 + OCR 识别文字层打包为可搜索 PDF，并保存为新文件"
-          style={{ background: '#1677ff', color: '#fff', borderColor: '#1677ff' }}
+          style={{ background: 'var(--color-primary)', color: '#fff', borderColor: 'var(--color-primary)' }}
         >
           {exporting ? '导出中…' : '📄 导出可搜索 PDF'}
         </button>
@@ -254,9 +255,9 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
           data-testid="ocr-export-toast"
           style={{
             padding: '8px 24px',
-            background: '#f6ffed',
-            borderBottom: '1px solid #b7eb8f',
-            color: '#389e0d',
+            background: 'var(--color-success-bg)',
+            borderBottom: '1px solid var(--color-success-bg)',
+            color: 'var(--green-7)',
             fontSize: 13,
             display: 'flex', alignItems: 'center', gap: 8,
           }}
@@ -344,7 +345,7 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
                   >
                     {ocrResult.regions.map((reg, i) => {
                       const c = reg.confidence || 0.9
-                      const color = c >= 0.8 ? '#52c41a' : c >= 0.5 ? '#faad14' : '#ff4d4f'
+                      const color = c >= 0.8 ? 'var(--color-success)' : c >= 0.5 ? 'var(--color-warning)' : 'var(--color-danger)'
                       const fill = c >= 0.8 ? 'rgba(82,196,26,0.12)' : c >= 0.5 ? 'rgba(250,173,20,0.12)' : 'rgba(255,77,79,0.12)'
                       const isHovered = hoveredIdx === i
                       return (
@@ -354,7 +355,7 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
                             x={scale(reg.x)} y={scale(reg.y)}
                             width={scale(reg.width)} height={scale(reg.height)}
                             fill={isHovered ? 'rgba(22,119,255,0.25)' : fill}
-                            stroke={isHovered ? '#1677ff' : color}
+                            stroke={isHovered ? 'var(--color-primary)' : color}
                             strokeWidth={isHovered ? '3' : '1.5'}
                             rx="2"
                             style={{ cursor: 'pointer', transition: 'all 120ms' }}
@@ -471,7 +472,7 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
                       <div className="xf-result-fields">
                         {ocrResult.regions.slice(0, 12).map((reg, i) => {
                           const c = reg.confidence || 0.9
-                          const confColor = c >= 0.8 ? '#52c41a' : c >= 0.5 ? '#faad14' : '#ff4d4f'
+                          const confColor = c >= 0.8 ? 'var(--color-success)' : c >= 0.5 ? 'var(--color-warning)' : 'var(--color-danger)'
                           const isHovered = hoveredIdx === i
                           return (
                             <div
@@ -480,8 +481,8 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
                               onMouseEnter={() => setHoveredIdx(i)}
                               onMouseLeave={() => setHoveredIdx(null)}
                               style={{
-                                background: isHovered ? '#e6f4ff' : undefined,
-                                borderColor: isHovered ? '#1677ff' : undefined,
+                                background: isHovered ? 'var(--color-primary-bg)' : undefined,
+                                borderColor: isHovered ? 'var(--color-primary)' : undefined,
                                 cursor: 'pointer', transition: 'all 120ms',
                               }}
                             >
@@ -724,7 +725,7 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
   } : null
 
   // 当前步骤对应的描边色 + label
-  const drawColor = step === 'refs' ? '#fa8c16' : '#1677ff'  // refs 橙色，fields 蓝色
+  const drawColor = step === 'refs' ? 'var(--orange-6)' : 'var(--color-primary)'  // refs 橙色，fields 蓝色
 
   return (
     <>
@@ -746,20 +747,20 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
             placeholder="模板名称（如：增值税专用发票）"
             value={tplName}
             onChange={e => setTplName(e.target.value)}
-            style={{ minWidth: 200, padding: '4px 8px', borderRadius: 4, border: '1px solid #d9d9d9' }}
+            style={{ minWidth: 200, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--color-border)' }}
           />
           <input
             placeholder="百度 templateSign（可选，留空=本地坐标模板）"
             value={sign}
             onChange={e => setSign(e.target.value)}
-            style={{ minWidth: 280, padding: '4px 8px', borderRadius: 4, border: '1px solid #d9d9d9', fontFamily: 'monospace', fontSize: 12 }}
+            style={{ minWidth: 280, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--color-border)', fontFamily: 'monospace', fontSize: 12 }}
           />
         </div>
         <div className="xf-template-actions">
           <button className="xf-btn-solid" onClick={save} disabled={saving}>
             {saving ? '保存中…' : '保 存'}
           </button>
-          {savedMsg && <span style={{ fontSize: 12, color: savedMsg.startsWith('✓') ? '#52c41a' : '#ff4d4f' }}>{savedMsg}</span>}
+          {savedMsg && <span style={{ fontSize: 12, color: savedMsg.startsWith('✓') ? 'var(--color-success)' : 'var(--color-danger)' }}>{savedMsg}</span>}
         </div>
       </div>
 
@@ -794,13 +795,13 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
                 className={`xf-template-overlay${activeField === f.id ? ' selected' : ''}`}
                 style={{
                   position: 'absolute', left: f.dx, top: f.dy, width: f.dw, height: f.dh,
-                  cursor: 'pointer', border: '2px solid #1677ff',
+                  cursor: 'pointer', border: '2px solid var(--color-primary)',
                 }}
                 onClick={(e) => { e.stopPropagation(); setActiveField(f.id) }}
               >
                 <span style={{
                   position: 'absolute', top: -16, left: 0,
-                  fontSize: 10, color: activeField === f.id ? '#1677ff' : '#86909c',
+                  fontSize: 10, color: activeField === f.id ? 'var(--color-primary)' : 'var(--color-text-tertiary)',
                   background: '#fff', padding: '0 4px', borderRadius: 2, whiteSpace: 'nowrap',
                 }}>{f.name}</span>
               </div>
@@ -812,13 +813,13 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
                 style={{
                   position: 'absolute', left: f.dx, top: f.dy, width: f.dw, height: f.dh,
                   pointerEvents: 'none',
-                  border: '2px dashed #fa8c16',
+                  border: '2px dashed var(--orange-6)',
                   background: 'rgba(250,140,22,0.06)',
                 }}
               >
                 <span style={{
                   position: 'absolute', top: -16, left: 0,
-                  fontSize: 10, color: '#fa8c16',
+                  fontSize: 10, color: 'var(--orange-6)',
                   background: '#fff', padding: '0 4px', borderRadius: 2, whiteSpace: 'nowrap',
                 }}>⚓ {f.name}</span>
               </div>
@@ -851,12 +852,12 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
                   onClick={() => setStep(s)}
                   style={{
                     flex: 1, padding: '12px 8px', textAlign: 'center', cursor: 'pointer',
-                    borderBottom: active ? `3px solid ${s === 'refs' ? '#fa8c16' : '#1677ff'}` : '3px solid transparent',
+                    borderBottom: active ? `3px solid ${s === 'refs' ? 'var(--orange-6)' : 'var(--color-primary)'}` : '3px solid transparent',
                     marginBottom: -2,
                     background: active ? '#fff' : 'transparent',
                   }}
                 >
-                  <div style={{ fontSize: 11, color: active ? (s === 'refs' ? '#fa8c16' : '#1677ff') : 'var(--xf-text-tertiary)' }}>
+                  <div style={{ fontSize: 11, color: active ? (s === 'refs' ? 'var(--orange-6)' : 'var(--color-primary)') : 'var(--xf-text-tertiary)' }}>
                     步骤 {i + 1} {completed && '✓'}
                   </div>
                   <div style={{ fontSize: 13, fontWeight: active ? 600 : 400, marginTop: 2 }}>
@@ -869,13 +870,13 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
 
           {step === 'refs' && (
             <div style={{ padding: 12, fontSize: 12, color: 'var(--xf-text-tertiary)', borderBottom: '1px solid var(--xf-border-light)' }}>
-              在样例图上<b style={{ color: '#fa8c16' }}>拖拽画框</b>创建参照字段，填写"实际文字"作为 OCR 模糊匹配锚点。
+              在样例图上<b style={{ color: 'var(--orange-6)' }}>拖拽画框</b>创建参照字段，填写"实际文字"作为 OCR 模糊匹配锚点。
               <br />识别时会自动根据这些锚点计算新图偏移/缩放。
             </div>
           )}
           {step === 'fields' && (
             <div style={{ padding: 12, fontSize: 12, color: 'var(--xf-text-tertiary)', borderBottom: '1px solid var(--xf-border-light)' }}>
-              在样例图上<b style={{ color: '#1677ff' }}>拖拽画框</b>创建识别字段（即要提取的数据区域）。坐标变换后落在此框内的文字就是字段值。
+              在样例图上<b style={{ color: 'var(--color-primary)' }}>拖拽画框</b>创建识别字段（即要提取的数据区域）。坐标变换后落在此框内的文字就是字段值。
             </div>
           )}
 
@@ -883,7 +884,7 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
             <div data-testid="ocr-ref-list" className="xf-field-list" style={{ flex: 1, overflow: 'auto' }}>
               {referenceFields.length === 0 ? (
                 <div className="xf-empty" style={{ padding: 24 }}>
-                  <div className="xf-empty-icon" style={{ color: '#fa8c16' }}>⚓</div>
+                  <div className="xf-empty-icon" style={{ color: 'var(--orange-6)' }}>⚓</div>
                   <div className="xf-empty-title">暂无参照字段</div>
                   <div className="xf-empty-desc">在样例图上拖拽画框</div>
                   <div style={{ marginTop: 8, fontSize: 11, color: 'var(--xf-text-tertiary)' }}>
@@ -893,7 +894,7 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
               ) : referenceFields.map(f => (
                 <div key={f.id} className={`xf-field-row${activeField === f.id ? ' active' : ''}`}>
                   <div className="xf-field-label">
-                    <span style={{ color: '#fa8c16', marginRight: 4 }}>⚓</span>
+                    <span style={{ color: 'var(--orange-6)', marginRight: 4 }}>⚓</span>
                     <input
                       data-testid={`ocr-ref-name-${f.id}`}
                       value={f.name}
@@ -908,8 +909,8 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
                       onChange={e => updateReferenceField(f.id, { text: e.target.value })}
                       placeholder="实际文字 (OCR 匹配)"
                       style={{
-                        flex: 1, border: '1px solid #fa8c16', borderRadius: 3, padding: '2px 6px',
-                        fontSize: 12, marginRight: 4, background: '#fff7e6',
+                        flex: 1, border: '1px solid var(--orange-6)', borderRadius: 3, padding: '2px 6px',
+                        fontSize: 12, marginRight: 4, background: 'var(--color-warning-bg)',
                       }}
                     />
                     <button className="xf-field-close" onClick={() => removeReferenceField(f.id)}>×</button>
@@ -926,7 +927,7 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
             <div data-testid="ocr-field-list" className="xf-field-list" style={{ flex: 1, overflow: 'auto' }}>
               {fields.length === 0 ? (
                 <div className="xf-empty" style={{ padding: 24 }}>
-                  <div className="xf-empty-icon" style={{ color: '#1677ff' }}>▭</div>
+                  <div className="xf-empty-icon" style={{ color: 'var(--color-primary)' }}>▭</div>
                   <div className="xf-empty-title">暂无识别字段</div>
                   <div className="xf-empty-desc">在样例图上拖拽创建</div>
                 </div>
@@ -942,7 +943,7 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
                     <select
                       value={f.type}
                       onChange={e => updateField(f.id, { type: e.target.value as any })}
-                      style={{ fontSize: 10, border: '1px solid #d9d9d9', borderRadius: 3, padding: '0 2px' }}
+                      style={{ fontSize: 10, border: '1px solid var(--color-border)', borderRadius: 3, padding: '0 2px' }}
                     >
                       <option value="string">文本</option>
                       <option value="number">数字</option>
@@ -964,7 +965,7 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
       {/* 底部导航：上一步 / 下一步 / 保存 */}
       <div data-testid="ocr-edit-nav" style={{
         display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px',
-        borderTop: '1px solid var(--xf-border-light)', background: '#fafbfc',
+        borderTop: '1px solid var(--xf-border-light)', background: 'var(--color-bg)',
       }}>
         <button
           data-testid="ocr-step-back"
@@ -982,13 +983,13 @@ function TemplateEditMode({ editingTemplate, onSaved }: { editingTemplate?: Temp
         <span style={{ fontSize: 11, color: 'var(--xf-text-tertiary)' }}>
           锚点 {referenceFields.length} · 字段 {fields.length}
           {referenceFields.length > 0 && referenceFields.some(r => !r.text.trim()) && (
-            <span style={{ color: '#faad14', marginLeft: 8 }}>⚠ 部分锚点缺文字</span>
+            <span style={{ color: 'var(--color-warning)', marginLeft: 8 }}>⚠ 部分锚点缺文字</span>
           )}
         </span>
         <button className="xf-btn-solid" onClick={save} disabled={saving}>
           {saving ? '保存中…' : '保 存'}
         </button>
-        {savedMsg && <span style={{ fontSize: 12, color: savedMsg.startsWith('✓') ? '#52c41a' : '#ff4d4f' }}>{savedMsg}</span>}
+        {savedMsg && <span style={{ fontSize: 12, color: savedMsg.startsWith('✓') ? 'var(--color-success)' : 'var(--color-danger)' }}>{savedMsg}</span>}
       </div>
     </>
   )
@@ -1103,7 +1104,7 @@ function TemplateManageMode({ onSwitchMode }: { onSwitchMode: (m: OcrMode, tpl?:
       </div>
 
       {error && (
-        <div style={{ padding: '8px 24px', background: '#fff1f0', borderBottom: '1px solid #ffa39e', color: '#cf1322', fontSize: 13 }}>
+        <div style={{ padding: '8px 24px', background: 'var(--color-danger-bg)', borderBottom: '1px solid var(--red-3)', color: 'var(--red-6)', fontSize: 13 }}>
           {error}
         </div>
       )}
@@ -1125,7 +1126,7 @@ function TemplateManageMode({ onSwitchMode }: { onSwitchMode: (m: OcrMode, tpl?:
           <div key={t.id} className="xf-tpl-row">
             <div className="xf-tpl-name">{t.name}</div>
             <div style={{ fontSize: 12 }}>
-              <span style={{ padding: '2px 6px', borderRadius: 8, background: '#f0f5ff', color: '#1677ff' }}>
+              <span style={{ padding: '2px 6px', borderRadius: 8, background: 'var(--color-primary-bg)', color: 'var(--color-primary)' }}>
                 {SCENARIO_LABELS[t.scenario] || t.scenario}
               </span>
             </div>
@@ -1156,18 +1157,18 @@ function TemplateManageMode({ onSwitchMode }: { onSwitchMode: (m: OcrMode, tpl?:
 
       {/* 识别结果展示 */}
       {recognizeResult && (
-        <div style={{ margin: 16, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
+        <div style={{ margin: 16, padding: 16, border: '1px solid var(--color-border-light)', borderRadius: 8, background: 'var(--color-bg)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
             <span style={{ fontWeight: 600, fontSize: 14 }}>🔍 识别结果</span>
             <span data-testid="ocr-result-engine" style={{ fontSize: 12, color: 'var(--xf-text-tertiary)' }}>
               {recognizeResult.engine} · {recognizeResult.ms}ms
-              {recognizeResult.isMock && <span style={{ marginLeft: 6, color: '#faad14' }}>（mock 模式，配置 BAIDU_OCR_API_KEY 后启用真实识别）</span>}
+              {recognizeResult.isMock && <span style={{ marginLeft: 6, color: 'var(--color-warning)' }}>（mock 模式，配置 BAIDU_OCR_API_KEY 后启用真实识别）</span>}
             </span>
             {recognizeResult.alignmentScore !== undefined && (
               <span data-testid="ocr-result-alignment" style={{
                 fontSize: 12, padding: '2px 8px', borderRadius: 10,
-                background: recognizeResult.alignmentScore > 0.7 ? '#f6ffed' : recognizeResult.alignmentScore > 0.3 ? '#fffbe6' : '#fff1f0',
-                color: recognizeResult.alignmentScore > 0.7 ? '#52c41a' : recognizeResult.alignmentScore > 0.3 ? '#faad14' : '#ff4d4f',
+                background: recognizeResult.alignmentScore > 0.7 ? 'var(--color-success-bg)' : recognizeResult.alignmentScore > 0.3 ? 'var(--color-warning-bg)' : 'var(--color-danger-bg)',
+                color: recognizeResult.alignmentScore > 0.7 ? 'var(--color-success)' : recognizeResult.alignmentScore > 0.3 ? 'var(--color-warning)' : 'var(--color-danger)',
                 border: '1px solid currentColor',
               }}>
                 对齐质量 {(recognizeResult.alignmentScore * 100).toFixed(0)}%
@@ -1183,7 +1184,7 @@ function TemplateManageMode({ onSwitchMode }: { onSwitchMode: (m: OcrMode, tpl?:
               <summary style={{ cursor: 'pointer', color: 'var(--xf-text-secondary)', userSelect: 'none' }}>
                 🔧 对齐诊断（{recognizeResult.anchors.filter((a: any) => a.matched).length}/{recognizeResult.anchors.length} 锚点匹配）
               </summary>
-              <div style={{ marginTop: 8, padding: 8, background: '#f5f5f5', borderRadius: 4 }}>
+              <div style={{ marginTop: 8, padding: 8, background: 'var(--color-bg-subtle)', borderRadius: 4 }}>
                 {recognizeResult.transform && (
                   <div style={{ marginBottom: 6, color: 'var(--xf-text-tertiary)', fontFamily: 'monospace' }}>
                     偏移 ({recognizeResult.transform.offsetX.toFixed(0)}, {recognizeResult.transform.offsetY.toFixed(0)}) 缩放 ({recognizeResult.transform.scaleX.toFixed(2)}, {recognizeResult.transform.scaleY.toFixed(2)})
@@ -1193,13 +1194,13 @@ function TemplateManageMode({ onSwitchMode }: { onSwitchMode: (m: OcrMode, tpl?:
                 {recognizeResult.anchors.map((a: any, i: number) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
                     <span style={{
-                      color: a.matched ? '#52c41a' : '#ff4d4f', fontFamily: 'monospace', width: 12,
+                      color: a.matched ? 'var(--color-success)' : 'var(--color-danger)', fontFamily: 'monospace', width: 12,
                     }}>
                       {a.matched ? '✓' : '✗'}
                     </span>
                     <span style={{ minWidth: 100, color: 'var(--xf-text-tertiary)' }}>{a.text || a.name}</span>
                     <span style={{ flex: 1 }} />
-                    <span style={{ color: a.matched ? '#1677ff' : '#999' }}>
+                    <span style={{ color: a.matched ? 'var(--color-primary)' : '#999' }}>
                       {a.matched ? `命中: ${a.region?.text || '?'}` : `未命中 (最佳=${(a.score * 100).toFixed(0)}%)`}
                     </span>
                   </div>
@@ -1209,19 +1210,19 @@ function TemplateManageMode({ onSwitchMode }: { onSwitchMode: (m: OcrMode, tpl?:
           )}
 
           {recognizeResult.warnings && recognizeResult.warnings.length > 0 && (
-            <div style={{ marginBottom: 12, padding: 8, background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 4, fontSize: 12, color: '#faad14' }}>
+            <div style={{ marginBottom: 12, padding: 8, background: 'var(--color-warning-bg)', border: '1px solid var(--amber-2)', borderRadius: 4, fontSize: 12, color: 'var(--color-warning)' }}>
               {recognizeResult.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
             </div>
           )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
             {recognizeResult.fields.map((f, i) => (
-              <div key={i} data-testid={`ocr-result-field-${f.name}`} style={{ padding: 8, background: '#fff', borderRadius: 6, border: '1px solid #e5e7eb' }}>
+              <div key={i} data-testid={`ocr-result-field-${f.name}`} style={{ padding: 8, background: '#fff', borderRadius: 6, border: '1px solid var(--color-border-light)' }}>
                 <div style={{ fontSize: 11, color: 'var(--xf-text-tertiary)' }}>{f.name}</div>
                 <div style={{ fontSize: 13, fontWeight: 500, marginTop: 2, wordBreak: 'break-all' }}>{f.value || '(空)'}</div>
                 <div style={{ display: 'flex', gap: 8, fontSize: 10, color: 'var(--xf-text-tertiary)', marginTop: 4 }}>
                   {f.confidence !== undefined && (
-                    <span style={{ color: f.confidence > 0.8 ? '#52c41a' : f.confidence > 0.3 ? '#faad14' : '#ff4d4f' }}>
+                    <span style={{ color: f.confidence > 0.8 ? 'var(--color-success)' : f.confidence > 0.3 ? 'var(--color-warning)' : 'var(--color-danger)' }}>
                       置信度 {(f.confidence * 100).toFixed(0)}%
                     </span>
                   )}

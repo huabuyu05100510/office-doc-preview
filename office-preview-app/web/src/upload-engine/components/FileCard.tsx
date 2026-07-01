@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // ============================================================
 // FileCard — 极致体验文件卡片（上传中 + 已完成）
 // ============================================================
@@ -18,34 +19,34 @@ interface Props {
 }
 
 const D = {
-  purple: '#7c3aed',
-  green: '#059669',
-  greenBg: '#ecfdf5',
-  red: '#dc2626',
-  redBg: '#fef2f2',
-  blue: '#2563eb',
-  amber: '#d97706',
-  amberBg: '#fffbeb',
-  gray50: '#f9fafb',
-  gray100: '#f3f4f6',
-  gray200: '#e5e7eb',
-  gray300: '#d1d5db',
-  gray400: '#9ca3af',
-  gray500: '#6b7280',
-  gray700: '#374151',
-  gray900: '#111827',
+  purple: 'var(--purple-7)',
+  green: 'var(--color-success)',
+  greenBg: 'var(--color-success-bg)',
+  red: 'var(--red-6)',
+  redBg: 'var(--color-danger-bg)',
+  blue: 'var(--color-accent)',
+  amber: 'var(--amber-6)',
+  amberBg: 'var(--color-warning-bg)',
+  gray50: 'var(--color-bg-subtle)',
+  gray100: 'var(--color-bg-subtle)',
+  gray200: 'var(--color-border-light)',
+  gray300: 'var(--color-text-placeholder)',
+  gray400: 'var(--color-text-tertiary)',
+  gray500: 'var(--color-text-secondary)',
+  gray700: 'var(--color-text-secondary)',
+  gray900: 'var(--slate-12)',
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   idle:       { label: '等待', color: D.gray500, bg: D.gray100 },
-  validating: { label: '校验中', color: D.blue, bg: '#eff6ff' },
-  processing: { label: '处理中', color: D.blue, bg: '#eff6ff' },
-  hashing:    { label: '指纹计算', color: D.blue, bg: '#eff6ff' },
-  checking:   { label: '秒传检测', color: D.blue, bg: '#eff6ff' },
+  validating: { label: '校验中', color: D.blue, bg: 'var(--color-primary-bg)' },
+  processing: { label: '处理中', color: D.blue, bg: 'var(--color-primary-bg)' },
+  hashing:    { label: '指纹计算', color: D.blue, bg: 'var(--color-primary-bg)' },
+  checking:   { label: '秒传检测', color: D.blue, bg: 'var(--color-primary-bg)' },
   uploading:  { label: '上传中', color: D.amber, bg: D.amberBg },
-  merging:    { label: '合并中', color: D.blue, bg: '#eff6ff' },
+  merging:    { label: '合并中', color: D.blue, bg: 'var(--color-primary-bg)' },
   done:       { label: '完成', color: D.green, bg: D.greenBg },
-  instant:    { label: '秒传', color: D.purple, bg: '#f5f3ff' },
+  instant:    { label: '秒传', color: D.purple, bg: 'var(--color-accent-bg)' },
   paused:     { label: '已暂停', color: D.amber, bg: D.amberBg },
   failed:     { label: '失败', color: D.red, bg: D.redBg },
   cancelled:  { label: '已取消', color: D.gray400, bg: D.gray100 },
@@ -65,7 +66,7 @@ export const FileCard: React.FC<Props> = ({ file, preview, onPause, onResume, on
         borderRadius: 12, cursor: 'pointer',
         background: isSelected ? '#fff' : '#fff',
         border: `1.5px solid ${isSelected ? D.purple : D.gray200}`,
-        boxShadow: isSelected ? `0 0 0 3px ${'#ede9fe'}, 0 2px 8px rgba(0,0,0,0.06)` : '0 1px 2px rgba(0,0,0,0.03)',
+        boxShadow: isSelected ? `0 0 0 3px ${'var(--color-accent-bg)'}, 0 2px 8px rgba(0,0,0,0.06)` : '0 1px 2px rgba(0,0,0,0.03)',
         transition: 'all .2s cubic-bezier(0.4, 0, 0.2, 1)',
       }}
       onMouseEnter={e => {
@@ -120,7 +121,7 @@ export const FileCard: React.FC<Props> = ({ file, preview, onPause, onResume, on
               <div style={{
                 height: '100%', borderRadius: 2,
                 width: `${file.progress}%`,
-                background: isPaused ? D.amber : `linear-gradient(90deg, ${D.purple}, #a78bfa)`,
+                background: isPaused ? D.amber : `linear-gradient(90deg, ${D.purple}, var(--purple-4))`,
                 transition: 'width .4s cubic-bezier(0.4, 0, 0.2, 1)',
               }} />
             </div>
@@ -153,7 +154,7 @@ export const FileCard: React.FC<Props> = ({ file, preview, onPause, onResume, on
       {/* Actions */}
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
         {isActive && (
-          <button onClick={(e) => { e.stopPropagation(); onPause() }} style={actionBtn('#f59e0b')}>
+          <button onClick={(e) => { e.stopPropagation(); onPause() }} style={actionBtn('var(--amber-5)')}>
             ⏸
           </button>
         )}
@@ -193,7 +194,7 @@ export function fileIcon(name: string): string {
 
 function actionBtn(color: string, ghost: boolean = false): React.CSSProperties {
   return {
-    width: 30, height: 30, border: ghost ? `1px solid #fecaca` : `1px solid #fde68a`,
+    width: 30, height: 30, border: ghost ? `1px solid var(--red-3)` : `1px solid var(--color-warning-bg)`,
     borderRadius: 8, cursor: 'pointer', fontSize: 12,
     background: ghost ? '#fff' : '#fff',
     color, display: 'flex', alignItems: 'center', justifyContent: 'center',

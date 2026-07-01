@@ -14,6 +14,9 @@ const LABELS: Record<MenuKey, string> = {
   convert: '格式转换',
   upload: '上传中心',
   voice: '语音中心',
+  bookmarks: '收藏夹',
+  samples: '示例库',
+  gallery: '图片画廊',
 }
 
 const SHORTCUTS: Record<MenuKey, string> = {
@@ -24,6 +27,9 @@ const SHORTCUTS: Record<MenuKey, string> = {
   convert: '⌘5',
   upload: '⌘6',
   voice: '⌘7',
+  bookmarks: '⌘B',
+  samples: '⌘S',
+  gallery: '⌘G',
 }
 
 /** Hook to be called inside a component (uses useNavigate) */

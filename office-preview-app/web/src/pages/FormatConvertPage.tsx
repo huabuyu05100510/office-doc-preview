@@ -1,3 +1,4 @@
+// 颜色迁移至 semantic.ts (Phase 2.A)
 // FormatConvertPage — 格式转换（AI 能力之一）
 // 模型：claude-sonnet-4-6
 //
@@ -176,7 +177,7 @@ function ConvertMode({ tasks }: { tasks: Task[] }) {
     <div style={{ padding: 24 }} data-testid="fc-convert-mode">
       {/* 控制条 */}
       <div className="oa-card" style={{ padding: 16, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <LayersIcon size={18} style={{ color: '#1677ff' }} />
+        <LayersIcon size={18} style={{ color: 'var(--color-primary)' }} />
         <SourcePicker tasks={tasks} value={taskId} onChange={setTaskId} testId="fc-source-select" />
         {/* 目标格式 toggle */}
         <div className="oa-tabs" style={{ borderBottom: 'none' }}>
@@ -200,7 +201,7 @@ function ConvertMode({ tasks }: { tasks: Task[] }) {
           {loading ? <><span className="xf-loading" /> 转换中…</> : '🔄 开始转换'}
         </button>
         {selectedTask?.convertStatus === 'done' && (
-          <span style={{ fontSize: 13, color: '#52c41a' }}>✓ 已转换 · 可直接预览</span>
+          <span style={{ fontSize: 13, color: 'var(--color-success)' }}>✓ 已转换 · 可直接预览</span>
         )}
       </div>
 
@@ -215,13 +216,13 @@ function ConvertMode({ tasks }: { tasks: Task[] }) {
         <div className="oa-card" style={{ padding: 24, textAlign: 'center' }}>
           <span className="xf-loading" style={{ width: 32, height: 32, margin: '0 auto 12px', display: 'block', borderWidth: 3 }} />
           <div style={{ fontWeight: 600, marginBottom: 8 }}>转换进行中…</div>
-          <div style={{ fontSize: 13, color: '#86909c' }}>
+          <div style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
             {result.progress?.pagesDone || 0} / {result.progress?.pagesTotal || 0} 页 · {result.progress?.pct || 0}%
           </div>
-          <div style={{ width: 320, height: 4, background: '#f0f1f3', borderRadius: 2, margin: '12px auto 0', overflow: 'hidden' }}>
+          <div style={{ width: 320, height: 4, background: 'var(--color-border-light)', borderRadius: 2, margin: '12px auto 0', overflow: 'hidden' }}>
             <div style={{
               width: `${result.progress?.pct || 0}%`, height: '100%',
-              background: '#1677ff', transition: 'width 300ms ease',
+              background: 'var(--color-primary)', transition: 'width 300ms ease',
             }} />
           </div>
         </div>
@@ -229,7 +230,7 @@ function ConvertMode({ tasks }: { tasks: Task[] }) {
 
       {/* 失败 */}
       {result?.status === 'failed' && (
-        <div className="oa-card" style={{ padding: 24, color: '#ff4d4f' }}>
+        <div className="oa-card" style={{ padding: 24, color: 'var(--color-danger)' }}>
           ❌ 转换失败：{result.error}
         </div>
       )}
@@ -262,12 +263,12 @@ function ConvertOutputs({ result, taskName, onCopyAll }: {
         </div>
         <div className="oa-stat-card">
           <div className="oa-stat-label">图片页数</div>
-          <div className="oa-stat-value" style={{ color: '#1677ff' }}>{meta?.pagesCount || 0}</div>
+          <div className="oa-stat-value" style={{ color: 'var(--color-primary)' }}>{meta?.pagesCount || 0}</div>
           <div className="oa-stat-delta">栅格化高清</div>
         </div>
         <div className="oa-stat-card">
           <div className="oa-stat-label">转换耗时</div>
-          <div className="oa-stat-value" style={{ color: '#52c41a' }}>
+          <div className="oa-stat-value" style={{ color: 'var(--color-success)' }}>
             {meta?.convertMs ? `${(meta.convertMs / 1000).toFixed(1)}s` : '-'}
           </div>
           <div className="oa-stat-delta">{meta?.engine}</div>
@@ -286,12 +287,12 @@ function ConvertOutputs({ result, taskName, onCopyAll }: {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
           {/* PDF */}
-          <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
+          <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 8, padding: 16, background: '#fff' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 24 }}>📕</span>
               <div>
                 <div style={{ fontWeight: 600 }}>PDF 文档</div>
-                <div style={{ fontSize: 12, color: '#86909c' }}>{humanSize(meta?.pdfSize)}</div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{humanSize(meta?.pdfSize)}</div>
               </div>
             </div>
             {result.pdfUrl && (
@@ -308,12 +309,12 @@ function ConvertOutputs({ result, taskName, onCopyAll }: {
 
           {/* 原文件 */}
           {result.originalUrl && (
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
+            <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 8, padding: 16, background: '#fff' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <span style={{ fontSize: 24 }}>📄</span>
                 <div>
                   <div style={{ fontWeight: 600 }}>原始文件</div>
-                  <div style={{ fontSize: 12, color: '#86909c' }}>{meta?.ext.toUpperCase()}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{meta?.ext.toUpperCase()}</div>
                 </div>
               </div>
               <a className="oa-btn oa-btn-default oa-btn-sm" href={result.originalUrl} download={taskName}>
@@ -324,12 +325,12 @@ function ConvertOutputs({ result, taskName, onCopyAll }: {
 
           {/* 复制文字 */}
           {pages.some(p => p.textUrl) && (
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
+            <div style={{ border: '1px solid var(--color-border-light)', borderRadius: 8, padding: 16, background: '#fff' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <span style={{ fontSize: 24 }}>📝</span>
                 <div>
                   <div style={{ fontWeight: 600 }}>文字层</div>
-                  <div style={{ fontSize: 12, color: '#86909c' }}>{pages.length} 页可复制</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{pages.length} 页可复制</div>
                 </div>
               </div>
               <button className="oa-btn oa-btn-default oa-btn-sm" onClick={onCopyAll}>
@@ -352,8 +353,8 @@ function ConvertOutputs({ result, taskName, onCopyAll }: {
                 target="_blank"
                 rel="noreferrer"
                 style={{
-                  border: '1px solid #e5e7eb', borderRadius: 6, overflow: 'hidden',
-                  background: '#fafafa', textDecoration: 'none', color: 'inherit',
+                  border: '1px solid var(--color-border-light)', borderRadius: 6, overflow: 'hidden',
+                  background: 'var(--color-bg-subtle)', textDecoration: 'none', color: 'inherit',
                   transition: 'transform 200ms, box-shadow 200ms',
                 }}
                 className="fc-thumb-card"
@@ -367,11 +368,11 @@ function ConvertOutputs({ result, taskName, onCopyAll }: {
                 />
                 <div style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '6px 10px', fontSize: 11, color: '#86909c',
-                  borderTop: '1px solid #f0f1f3', background: '#fff',
+                  padding: '6px 10px', fontSize: 11, color: 'var(--color-text-tertiary)',
+                  borderTop: '1px solid var(--color-border-light)', background: '#fff',
                 }}>
                   <span>第 {p.page} 页</span>
-                  {p.textUrl && <span style={{ color: '#52c41a' }}>文字 ✓</span>}
+                  {p.textUrl && <span style={{ color: 'var(--color-success)' }}>文字 ✓</span>}
                 </div>
               </a>
             ))}
@@ -399,7 +400,7 @@ function CompareMode({ tasks }: { tasks: Task[] }) {
       <div className="oa-card" style={{ padding: 16, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
         <SourcePicker tasks={tasks} value={taskId} onChange={setTaskId} testId="fc-compare-source" />
         {task && (
-          <span style={{ fontSize: 13, color: '#86909c' }}>
+          <span style={{ fontSize: 13, color: 'var(--color-text-tertiary)' }}>
             原文件 ({task.ext.toUpperCase()}) ↔ 转换产物 (PDF + 图片)
           </span>
         )}
@@ -417,24 +418,24 @@ function CompareMode({ tasks }: { tasks: Task[] }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }} data-testid="fc-compare-grid">
           {/* 左：原文件 */}
           <div className="oa-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f1f3', background: '#fafbfc', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border-light)', background: 'var(--color-bg)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="oa-tab active" style={{ borderBottom: 'none' }}>📄 原文件</span>
-              <span style={{ fontSize: 12, color: '#86909c' }}>{task.name}</span>
+              <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{task.name}</span>
             </div>
-            <div style={{ padding: 16, maxHeight: '70vh', overflow: 'auto', background: '#f5f5f5', textAlign: 'center' }}>
+            <div style={{ padding: 16, maxHeight: '70vh', overflow: 'auto', background: 'var(--color-bg-subtle)', textAlign: 'center' }}>
               <OriginalPreview task={task} />
             </div>
           </div>
 
           {/* 右：转换产物 */}
           <div className="oa-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f1f3', background: '#fafbfc', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--color-border-light)', background: 'var(--color-bg)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="oa-tab active" style={{ borderBottom: 'none' }}>🖼️ 转换产物</span>
-              <span style={{ fontSize: 12, color: '#86909c' }}>
+              <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
                 {task.pages?.length || 0} 页 · {humanSize(task.previewSize)}
               </span>
             </div>
-            <div style={{ padding: 16, maxHeight: '70vh', overflow: 'auto', background: '#f5f5f5' }}>
+            <div style={{ padding: 16, maxHeight: '70vh', overflow: 'auto', background: 'var(--color-bg-subtle)' }}>
               <ConvertedPreview task={task} />
             </div>
           </div>
@@ -500,7 +501,7 @@ function ConvertedPreview({ task }: { task: Task }) {
       {pages.map(p => (
         <div key={p.page} style={{ background: '#fff', borderRadius: 4, boxShadow: '0 1px 4px rgba(0,0,0,0.08)', overflow: 'hidden', maxWidth: '100%' }}>
           <img src={p.url} alt={`第 ${p.page} 页`} loading="lazy" style={{ display: 'block', width: '100%' }} />
-          <div style={{ padding: '4px 10px', fontSize: 11, color: '#86909c', background: '#fafafa', borderTop: '1px solid #f0f1f3' }}>
+          <div style={{ padding: '4px 10px', fontSize: 11, color: 'var(--color-text-tertiary)', background: 'var(--color-bg-subtle)', borderTop: '1px solid var(--color-border-light)' }}>
             第 {p.page} 页 · {p.width}×{p.height}
           </div>
         </div>
@@ -517,7 +518,7 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
   const [loadingAnn, setLoadingAnn] = useState(false)
   const [selection, setSelection] = useState<string>('')
   const [note, setNote] = useState('')
-  const [color, setColor] = useState('#fff3bf')
+  const [color, setColor] = useState('var(--color-warning-bg)')
   const [copied, setCopied] = useState(false)
 
   const task = useMemo(() => tasks.find(t => t.id === taskId) || null, [tasks, taskId])
@@ -654,7 +655,7 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <button className="oa-btn oa-btn-default oa-btn-sm" onClick={() => setPageIdx(i => Math.max(0, i - 1))} disabled={pageIdx === 0}>←</button>
-              <span style={{ fontSize: 13, color: '#4e5969', minWidth: 70, textAlign: 'center' }}>
+              <span style={{ fontSize: 13, color: 'var(--color-text-secondary)', minWidth: 70, textAlign: 'center' }}>
                 {pageIdx + 1} / {pages.length}
               </span>
               <button className="oa-btn oa-btn-default oa-btn-sm" onClick={() => setPageIdx(i => Math.min(pages.length - 1, i + 1))} disabled={pageIdx >= pages.length - 1}>→</button>
@@ -686,12 +687,12 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
           {/* 左：图片+文字层（可选中） */}
           <div className="oa-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f1f3', background: '#fafbfc', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--color-border-light)', background: 'var(--color-bg)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14, fontWeight: 600 }}>📖 第 {pageIdx + 1} 页</span>
-              <span style={{ fontSize: 12, color: '#86909c' }}>· 在文字上划选 → 标注 / 复制</span>
-              {copied && <span style={{ fontSize: 12, color: '#52c41a', marginLeft: 'auto' }}>✓ 已复制</span>}
+              <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>· 在文字上划选 → 标注 / 复制</span>
+              {copied && <span style={{ fontSize: 12, color: 'var(--color-success)', marginLeft: 'auto' }}>✓ 已复制</span>}
             </div>
-            <div style={{ padding: 24, background: '#f5f5f5', maxHeight: '70vh', overflow: 'auto', display: 'flex', justifyContent: 'center' }}>
+            <div style={{ padding: 24, background: 'var(--color-bg-subtle)', maxHeight: '70vh', overflow: 'auto', display: 'flex', justifyContent: 'center' }}>
               <div style={{ position: 'relative', width: currentPage.width, height: currentPage.height, background: '#fff', boxShadow: '0 1px 6px rgba(0,0,0,0.1)' }}>
                 <img src={currentPage.url} alt={`page ${pageIdx + 1}`} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
                 {textHtml && (
@@ -710,7 +711,7 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
                     style={{
                       position: 'absolute',
                       left: 4, top: 4 + pageAnnotations.indexOf(a) * 32,
-                      background: a.color || '#fff3bf',
+                      background: a.color || 'var(--color-warning-bg)',
                       color: '#333',
                       fontSize: 11,
                       padding: '3px 8px',
@@ -733,8 +734,8 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
           <div className="oa-card" style={{ padding: 16, alignSelf: 'start', maxHeight: '70vh', overflow: 'auto' }}>
             {/* 新建标注 */}
             {selection ? (
-              <div style={{ marginBottom: 16, padding: 12, background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6 }}>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>已选文字：</div>
+              <div style={{ marginBottom: 16, padding: 12, background: 'var(--color-warning-bg)', border: '1px solid var(--amber-2)', borderRadius: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginBottom: 6 }}>已选文字：</div>
                 <div style={{ fontSize: 13, lineHeight: 1.6, marginBottom: 8, maxHeight: 80, overflow: 'auto' }}>
                   "{selection.slice(0, 120)}{selection.length > 120 ? '…' : ''}"
                 </div>
@@ -742,17 +743,17 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
                   placeholder="批注（可选）…"
                   value={note}
                   onChange={e => setNote(e.target.value)}
-                  style={{ width: '100%', minHeight: 60, padding: 8, fontSize: 13, border: '1px solid #e5e7eb', borderRadius: 4, resize: 'vertical', marginBottom: 8 }}
+                  style={{ width: '100%', minHeight: 60, padding: 8, fontSize: 13, border: '1px solid var(--color-border-light)', borderRadius: 4, resize: 'vertical', marginBottom: 8 }}
                 />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, color: '#86909c' }}>颜色：</span>
-                  {['#fff3bf', '#ffd6e7', '#d9f7be', '#bae7ff', '#efdbff'].map(c => (
+                  <span style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>颜色：</span>
+                  {['var(--color-warning-bg)', 'var(--magenta-2)', 'var(--color-success-bg)', 'var(--blue-2)', 'var(--purple-2)'].map(c => (
                     <button
                       key={c}
                       onClick={() => setColor(c)}
                       style={{
                         width: 20, height: 20, borderRadius: '50%', background: c,
-                        border: color === c ? '2px solid #1677ff' : '1px solid #e5e7eb',
+                        border: color === c ? '2px solid var(--color-primary)' : '1px solid var(--color-border-light)',
                         cursor: 'pointer', padding: 0,
                       }}
                       aria-label={`color ${c}`}
@@ -768,7 +769,7 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
                 </div>
               </div>
             ) : (
-              <div style={{ marginBottom: 16, padding: 16, background: '#fafafa', borderRadius: 6, textAlign: 'center', fontSize: 13, color: '#86909c' }}>
+              <div style={{ marginBottom: 16, padding: 16, background: 'var(--color-bg-subtle)', borderRadius: 6, textAlign: 'center', fontSize: 13, color: 'var(--color-text-tertiary)' }}>
                 💡 在左侧文字层上 <strong>划选</strong> 即可创建标注 / 复制
               </div>
             )}
@@ -776,15 +777,15 @@ function AnnotateMode({ tasks }: { tasks: Task[] }) {
             {/* 标注列表 */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>📋 本页标注</span>
-              <span style={{ fontSize: 11, color: '#86909c' }}>({pageAnnotations.length})</span>
+              <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>({pageAnnotations.length})</span>
               {loadingAnn && <span className="xf-loading" style={{ width: 12, height: 12, borderWidth: 1.5 }} />}
             </div>
             {pageAnnotations.length === 0 ? (
-              <div style={{ fontSize: 13, color: '#c9cdd4', textAlign: 'center', padding: 16 }}>暂无标注</div>
+              <div style={{ fontSize: 13, color: 'var(--color-text-placeholder)', textAlign: 'center', padding: 16 }}>暂无标注</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {pageAnnotations.map(a => (
-                  <div key={a.id} style={{ padding: 10, borderRadius: 6, background: a.color || '#fff3bf', fontSize: 12, border: '1px solid rgba(0,0,0,0.08)' }}>
+                  <div key={a.id} style={{ padding: 10, borderRadius: 6, background: a.color || 'var(--color-warning-bg)', fontSize: 12, border: '1px solid rgba(0,0,0,0.08)' }}>
                     <div style={{ fontWeight: 600, marginBottom: 4, color: '#333', lineHeight: 1.5 }}>
                       "{a.text.slice(0, 50)}{a.text.length > 50 ? '…' : ''}"
                     </div>

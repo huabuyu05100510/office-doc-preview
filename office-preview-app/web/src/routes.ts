@@ -1,7 +1,17 @@
 // 模型：claude-sonnet-4-6
 // Route table — single source of truth for menu key <-> URL mapping
 
-export type MenuKey = 'files' | 'translate' | 'qc' | 'ocr' | 'convert' | 'upload' | 'voice'
+export type MenuKey =
+  | 'files'
+  | 'translate'
+  | 'qc'
+  | 'ocr'
+  | 'convert'
+  | 'upload'
+  | 'voice'
+  | 'bookmarks'
+  | 'samples'
+  | 'gallery'
 
 export const ROUTES: Record<MenuKey, string> = {
   files: '/files',
@@ -11,10 +21,14 @@ export const ROUTES: Record<MenuKey, string> = {
   convert: '/convert',
   upload: '/upload',
   voice: '/voice',
+  bookmarks: '/bookmarks',
+  samples: '/samples',
+  gallery: '/gallery',
 }
 
 export const MENU_KEYS: readonly MenuKey[] = [
   'files', 'translate', 'qc', 'ocr', 'convert', 'upload', 'voice',
+  'bookmarks', 'samples', 'gallery',
 ] as const
 
 export function menuKeyToRoute(key: MenuKey): string {
