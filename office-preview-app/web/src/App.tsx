@@ -88,7 +88,7 @@ export default function App() {
     createdAt: t.createdAt,
   }))
 
-  const activeTaskId = tasks[0]?.id
+  const activeTaskId = useStore.getState().selected?.id || tasks[0]?.id
 
   return (
     <AppShell>
@@ -107,8 +107,14 @@ export default function App() {
         } : undefined}
         tasks={taskItems}
         selectedTaskId={activeTaskId}
-        onSelectTask={() => {/* 未来：切换预览任务 */}}
-        showRightPanel={active === 'files' || active === 'translate'}
+        onSelectTask={(taskId) => {
+          // 路由交给 RightPanel 内部 useNavigate 完成；此处仅同步 store
+          const ts = new Date().toISOString()
+          console.info(`[app ${ts}] selectTask dispatched:`, taskId)
+          const t = tasks.find(x => x.id === taskId)
+          if (t) useStore.getState().select(t)
+        }}
+        showRightPanel={active === 'files'}
         fullWidth={active === 'qc' || active === 'ocr' || active === 'convert' || active === 'upload' || active === 'voice'}
       >
         {/* 降级模式 banner */}

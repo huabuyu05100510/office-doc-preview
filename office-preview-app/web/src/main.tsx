@@ -1,6 +1,7 @@
 // 模型：claude-sonnet-4-6
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './styles.css'
 import './a11y/reducedMotion.css'
@@ -18,6 +19,8 @@ function Bootstrap() {
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <Bootstrap />
+    <BrowserRouter>
+      <Bootstrap />
+    </BrowserRouter>
   </React.StrictMode>
 )

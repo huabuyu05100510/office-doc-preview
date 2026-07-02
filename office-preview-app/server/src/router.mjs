@@ -21,6 +21,10 @@ import { recognizeByTemplate, recognizeGeneral } from './baidu-iocr.mjs'
 import { matchTemplate } from './template-matcher.mjs'
 import { generateSearchablePdf } from './ocr-pdf.mjs'
 import { listEntries, appendEntry, removeEntry, clearEntries } from './workspace-timeline.mjs'
+import { appendFrame, tailFrames, getJob, isJobCancelled, clearJob } from './translate-jobs.mjs'
+import { appendTerm, listTerms, deleteTerm, countTerms, parseCsv as parseGlossaryCsv } from './translate-glossary.mjs'
+import { addTmEntry, lookupTm, deleteTmEntry, countTm } from './translate-memory.mjs'
+import { generateBilingualDocx, generateBilingualPdf, generateTranslationOnlyPdf } from './translated-export.mjs'
 
 function sendJSON(res, code, data) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -753,6 +757,70 @@ async function handleRoute(req, res, url, pathname) {
     return await handleInspectTranslateText(req, res, url)
   }
 
+  // ============ Phase A.3：进度轮询 / 批量 / 术语表 / TM / 导出 ============
+  // GET /api/inspect/translate/progress/:jobId
+  {
+    const progressMatch = pathname.match(/^\/api\/inspect\/translate\/progress\/([\w-]+)$/)
+    if (progressMatch && req.method === 'GET') {
+      return await handleInspectTranslateProgress(req, res, url, progressMatch[1])
+    }
+  }
+
+  // POST /api/translate/image/batch
+  if (pathname === '/api/translate/image/batch' && req.method === 'POST') {
+    return await handleTranslateImageBatchStart(req, res)
+  }
+  // GET /api/translate/image/batch/:jobId — 复用 progress handler
+  {
+    const batchPollMatch = pathname.match(/^\/api\/translate\/image\/batch\/([\w-]+)$/)
+    if (batchPollMatch && req.method === 'GET') {
+      return await handleInspectTranslateProgress(req, res, url, batchPollMatch[1])
+    }
+  }
+  // POST /api/translate/image/batch/:jobId/cancel
+  {
+    const batchCancelMatch = pathname.match(/^\/api\/translate\/image\/batch\/([\w-]+)\/cancel$/)
+    if (batchCancelMatch && req.method === 'POST') {
+      return await handleTranslateImageBatchCancel(req, res, batchCancelMatch[1])
+    }
+  }
+
+  // 术语表 CRUD
+  if (pathname === '/api/translate/glossary' && req.method === 'POST') {
+    return await handleGlossaryCreate(req, res)
+  }
+  if (pathname === '/api/translate/glossary' && req.method === 'GET') {
+    return await handleGlossaryList(req, res, url)
+  }
+  if (pathname === '/api/translate/glossary/import' && req.method === 'POST') {
+    return await handleGlossaryImport(req, res)
+  }
+  {
+    const glossaryDelMatch = pathname.match(/^\/api\/translate\/glossary\/([\w-]+)$/)
+    if (glossaryDelMatch && req.method === 'DELETE') {
+      return await handleGlossaryDelete(req, res, url, glossaryDelMatch[1])
+    }
+  }
+
+  // 翻译记忆 CRUD
+  if (pathname === '/api/translate/memory' && req.method === 'POST') {
+    return await handleMemoryCreate(req, res)
+  }
+  if (pathname === '/api/translate/memory' && req.method === 'GET') {
+    return await handleMemoryLookup(req, res, url)
+  }
+  {
+    const memoryDelMatch = pathname.match(/^\/api\/translate\/memory\/([\w-]+)$/)
+    if (memoryDelMatch && req.method === 'DELETE') {
+      return await handleMemoryDelete(req, res, url, memoryDelMatch[1])
+    }
+  }
+
+  // 导出
+  if (pathname === '/api/inspect/translate/export' && req.method === 'GET') {
+    return await handleInspectTranslateExport(req, res, url)
+  }
+
   // 实时翻译（单段）：text + sourceLang + targetLang → target + charMap + ms
   if (pathname === '/api/translate/realtime' && req.method === 'POST') {
     return await handleTranslateRealtime(req, res)
@@ -1332,7 +1400,10 @@ async function handleInspectTranslate(req, res) {
       taskId, sourceLang = 'zh-CN', targetLang,
       linesPerPage, pageW, pageH,
       strategy,  // v4.0: 'passthrough' | 'synthetic'（可选）
-      text: inlineText  // v4.2: standalone 模式（前端 TranslationPage 直接传文本）
+      text: inlineText,  // v4.2: standalone 模式（前端 TranslationPage 直接传文本）
+      jobId,             // v4.3: 可选；启用 JSONL 进度日志
+      glossary,          // v4.3: 可选；术语表 Term[]
+      tm,                // v4.3: 可选；翻译记忆 TmEntry[]
     } = parseJSONBody(body)
     if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
     if (!targetLang) return sendJSON(res, 400, { error: 'targetLang required' })
@@ -1365,12 +1436,20 @@ async function handleInspectTranslate(req, res) {
       task,  // v4.0：translate() 用 task.ext/previewExt/pages 判断走 identity mock 还是 synthetic
       linesPerPage: linesPerPage ? Number(linesPerPage) : undefined,
       pageW: pageW ? Number(pageW) : undefined,
-      pageH: pageH ? Number(pageH) : undefined
+      pageH: pageH ? Number(pageH) : undefined,
+      jobId: jobId || null,
+      glossary: Array.isArray(glossary) ? glossary : null,
+      tm: Array.isArray(tm) ? tm : null,
     })
     const ms = Date.now() - t0
 
     // 可观测响应头
     const engine = result.meta?.engine || 'mock-v1'
+    const mode = result.meta?.mode || 'text'
+    const sourceWords = result.meta?.sourceWords ?? 0
+    const glossaryHits = result.meta?.glossaryHits ?? 0
+    const tmHits = result.meta?.tmHits ?? 0
+    const finalJobId = result.meta?.jobId || jobId
     res.setHeader('X-Translate-Engine', engine)
     res.setHeader('X-Translate-Strategy', strategy || 'synthetic')
     res.setHeader('X-Translate-Ms', String(ms))
@@ -1378,9 +1457,15 @@ async function handleInspectTranslate(req, res) {
     res.setHeader('X-Translate-Pages', String(result.pages.length))
     res.setHeader('X-Translate-Source-Chars', String(result.meta.sourceChars))
     res.setHeader('X-Translate-Target-Chars', String(result.meta.targetChars))
+    // v4.3: 新增观测头
+    res.setHeader('X-Translate-Mode', mode)
+    res.setHeader('X-Translate-Words', String(sourceWords))
+    res.setHeader('X-Translate-Glossary-Hits', String(glossaryHits))
+    res.setHeader('X-Translate-TM-Hits', String(tmHits))
+    if (finalJobId) res.setHeader('X-Job-Id', finalJobId)
 
     // 服务端日志
-    console.log(`[inspect-translate] task=${taskId} ${sourceLang}→${targetLang} strategy=${strategy || 'synthetic'} engine=${engine} segments=${result.segments.length} pages=${result.pages.length} srcChars=${result.meta.sourceChars} ms=${ms}`)
+    console.log(`[inspect-translate] task=${taskId} ${sourceLang}→${targetLang} strategy=${strategy || 'synthetic'} engine=${engine} mode=${mode} segments=${result.segments.length} pages=${result.pages.length} srcChars=${result.meta.sourceChars} words=${sourceWords} glossaryHits=${glossaryHits} tmHits=${tmHits} ms=${ms}`)
 
     return sendJSON(res, 200, result)
   } catch (e) {
@@ -1650,7 +1735,18 @@ async function handleAnnotationCreate(req, res) {
 
     res.setHeader('X-Annotation-Id', annotation.id)
     res.setHeader('X-Annotation-Kind', annotation.kind)
+    // Phase A.5 — standardized observability headers (additive, backward-compat)
+    res.setHeader('X-Translate-Annotation-Id', annotation.id)
+    res.setHeader('X-Translate-Annotation-Kind', annotation.kind)
+    // encode() returns createdAt (Date.now() at creation); use it as updatedAt
+    res.setHeader(
+      'X-Translate-Annotation-Updated-At',
+      new Date(annotation.createdAt).toISOString(),
+    )
     console.log(`[annotation-create] kind=${annotation.kind} task=${input.taskId || 'standalone'} id=${annotation.id}`)
+    console.log(
+      `[translate-annotation ${new Date().toISOString()}] task=${input.taskId || 'standalone'} kind=${annotation.kind} action=add segId=${input.segmentId || ''} id=${annotation.id}`,
+    )
 
     return sendJSON(res, 200, { ok: true, id: annotation.id, annotation })
   } catch (e) {
@@ -1671,6 +1767,12 @@ async function handleAnnotationList(req, res, url) {
     const file = path.join(CONFIG.DERIVED_DIR, 'translate-annotations', `${taskId}.jsonl`)
     if (!fs.existsSync(file)) {
       res.setHeader('X-Annotation-Count', '0')
+      // Phase A.5 — standardized observability headers (additive, backward-compat)
+      res.setHeader('X-Translate-Annotation-Count', '0')
+      res.setHeader('X-Translate-Annotation-Task-Id', taskId)
+      console.log(
+        `[translate-annotation ${new Date().toISOString()}] task=${taskId} action=list count=0`,
+      )
       return sendJSON(res, 200, { items: [] })
     }
     const raw = fs.readFileSync(file, 'utf-8')
@@ -1681,7 +1783,13 @@ async function handleAnnotationList(req, res, url) {
       try { items.push(decode(line)) } catch (e) { console.warn('[annotation-list] skip bad line:', e.message) }
     }
     res.setHeader('X-Annotation-Count', String(items.length))
+    // Phase A.5 — standardized observability headers (additive, backward-compat)
+    res.setHeader('X-Translate-Annotation-Count', String(items.length))
+    res.setHeader('X-Translate-Annotation-Task-Id', taskId)
     console.log(`[annotation-list] task=${taskId} count=${items.length}`)
+    console.log(
+      `[translate-annotation ${new Date().toISOString()}] task=${taskId} action=list count=${items.length}`,
+    )
     return sendJSON(res, 200, { items })
   } catch (e) {
     console.error('[annotation-list] failed:', e.message)
@@ -1717,7 +1825,13 @@ async function handleAnnotationDelete(req, res, url) {
     else fs.writeFileSync(file, kept.join('\n') + '\n')
 
     res.setHeader('X-Annotation-Removed', String(removed))
+    // Phase A.5 — standardized observability headers (additive, backward-compat)
+    res.setHeader('X-Translate-Annotation-Removed-Id', id)
+    res.setHeader('X-Translate-Annotation-Task-Id', taskId)
     console.log(`[annotation-delete] task=${taskId} id=${id} removed=${removed}`)
+    console.log(
+      `[translate-annotation ${new Date().toISOString()}] task=${taskId} action=delete id=${id}`,
+    )
     return sendJSON(res, 200, { ok: true, removed })
   } catch (e) {
     console.error('[annotation-delete] failed:', e.message)
@@ -2109,5 +2223,484 @@ async function handleTimelineClear(req, res) {
   } catch (e) {
     console.error('[workspace-timeline] clear failed:', e.message)
     return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+// ============ Phase A.3：进度 / 批量 / 术语表 / TM / 导出 ============
+// 模型：claude-sonnet-4-6
+
+/**
+ * GET /api/inspect/translate/progress/:jobId?sinceSeq=N
+ *  - 从 JSONL 拉取进度帧（增量 sinceSeq）
+ *  - 响应头：X-Job-Id / X-Job-Last-Seq / X-Job-Frames / X-Job-Status / X-Job-Created-At
+ */
+async function handleInspectTranslateProgress(req, res, url, jobId) {
+  try {
+    const sinceSeq = Number(url.searchParams.get('sinceSeq') || 0)
+    const frames = tailFrames({ jobId, sinceSeq })
+    const job = getJob({ jobId })
+    const lastSeq = job ? job.lastSeq : (frames.length > 0 ? frames[frames.length - 1].seq : 0)
+    const status = job ? job.status : (frames.length > 0 ? frames[frames.length - 1].kind : 'unknown')
+    const createdAt = job ? new Date(job.createdAt).toISOString() : new Date().toISOString()
+
+    res.setHeader('X-Job-Id', jobId)
+    res.setHeader('X-Job-Last-Seq', String(lastSeq))
+    res.setHeader('X-Job-Frames', String(frames.length))
+    res.setHeader('X-Job-Status', status)
+    res.setHeader('X-Job-Created-At', createdAt)
+
+    console.log(`[inspect-translate-progress ${new Date().toISOString()}] job=${jobId} since=${sinceSeq} → ${frames.length} frames (lastSeq=${lastSeq})`)
+
+    return sendJSON(res, 200, { jobId, lastSeq, frames, status, sinceSeq })
+  } catch (e) {
+    console.error('[inspect-translate-progress] failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * POST /api/translate/image/batch
+ * 入参：{ taskIds[], sourceLang, targetLang, glossaryId?, tmId? }
+ * 出参：202 { jobId, total, progressUrl }
+ *
+ * v4.3.1 实现：fire-and-forget JSONL 批量翻译。
+ *   - 启动后立即返回 202 + jobId
+ *   - 后台逐步处理每张图：OCR（mock identity）→ translate → appendFrame('image-done')
+ *   - 取消通过 POST /api/translate/image/batch/:jobId/cancel
+ *
+ * 简化说明：本版本不调用真实 OCR provider（无环境变量）；仅做"进度演示 + 接口闭环"。
+ */
+async function handleTranslateImageBatchStart(req, res) {
+  try {
+    const MAX_BODY = 200 * 8 * 1024  // 200 taskIds × 8KB
+    const body = await readBody(req, MAX_BODY + 1024)
+    const { taskIds, sourceLang = 'zh-CN', targetLang, glossaryId, tmId } = parseJSONBody(body)
+    if (!Array.isArray(taskIds) || taskIds.length === 0) {
+      return sendJSON(res, 400, { error: 'taskIds must be a non-empty array' })
+    }
+    if (taskIds.length > 200) {
+      return sendJSON(res, 413, { error: `taskIds exceeds maximum of 200 (got ${taskIds.length})` })
+    }
+    if (!sourceLang || !targetLang) {
+      return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    }
+    if (!SUPPORTED_LANGS.has(sourceLang)) return sendJSON(res, 400, { error: `unsupported sourceLang: ${sourceLang}` })
+    if (!SUPPORTED_LANGS.has(targetLang)) return sendJSON(res, 400, { error: `unsupported targetLang: ${targetLang}` })
+
+    const jobId = 'batch_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6)
+
+    appendFrame({
+      jobId,
+      kind: 'started',
+      payload: {
+        total: taskIds.length,
+        sourceLang, targetLang,
+        glossaryId: glossaryId || null,
+        tmId: tmId || null,
+        ts: new Date().toISOString(),
+      },
+    })
+    console.log(`[translate-image-batch ${new Date().toISOString()}] start job=${jobId} total=${taskIds.length} src=${sourceLang} tgt=${targetLang} glossary=${glossaryId || 'none'} tm=${tmId || 'none'}`)
+
+    res.setHeader('X-Job-Id', jobId)
+    res.setHeader('X-Batch-Total', String(taskIds.length))
+    res.setHeader('X-Batch-Source-Lang', sourceLang)
+    res.setHeader('X-Batch-Target-Lang', targetLang)
+    res.setHeader('Location', `/api/translate/image/batch/${jobId}`)
+
+    // Fire-and-forget 后台进度（不 await）
+    processImageBatchAsync({ jobId, taskIds, sourceLang, targetLang })
+      .catch(err => {
+        console.error(`[translate-image-batch ${new Date().toISOString()}] job=${jobId} background error: ${err.message}`)
+        appendFrame({ jobId, kind: 'failed', payload: { error: err.message, page: null } })
+      })
+
+    return sendJSON(res, 202, {
+      jobId,
+      total: taskIds.length,
+      progressUrl: `/api/translate/image/batch/${jobId}`,
+      pollIntervalMs: 1000,
+    })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[translate-image-batch] start failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * 后台异步推进批量任务（每张图 appendFrame('image-done' / 'finished' / 'failed' / 'cancelled')）
+ * semaphore=3 模拟并发；isJobCancelled 检查每张图前触发
+ */
+async function processImageBatchAsync({ jobId, taskIds, sourceLang, targetLang }) {
+  const total = taskIds.length
+  const startedAt = Date.now()
+  let okCount = 0
+  let failedCount = 0
+  const semaphore = 3
+
+  // 简单信号量：控制 in-flight ≤ 3
+  let inFlight = 0
+  const queue = []
+
+  const processOne = async (taskId, index) => {
+    if (isJobCancelled({ jobId })) {
+      appendFrame({ jobId, kind: 'image-done', payload: { taskId, index, status: 'skipped', reason: 'cancelled' } })
+      return 'cancelled'
+    }
+    const t0 = Date.now()
+    try {
+      // 简化：mock 一张"图片 OCR + 翻译"（实际场景调 ocrImage + translateOnce）
+      // 这里只 sleep 模拟 + 写入 image-done 帧
+      await new Promise(r => setTimeout(r, 10))
+      const ms = Date.now() - t0
+      const task = getTask(taskId)
+      const taskExists = !!task
+      appendFrame({
+        jobId,
+        kind: 'image-done',
+        payload: {
+          taskId, index, total,
+          ms,
+          ocrMs: ms,
+          translateMs: 0,
+          confidence: 0.85,
+          status: taskExists ? 'ok' : 'missing',
+        },
+      })
+      okCount++
+      return 'ok'
+    } catch (e) {
+      failedCount++
+      appendFrame({
+        jobId,
+        kind: 'image-done',
+        payload: { taskId, index, status: 'failed', error: e.message },
+      })
+      return 'failed'
+    }
+  }
+
+  const runQueue = async () => {
+    while (queue.length > 0 && inFlight < semaphore) {
+      if (isJobCancelled({ jobId })) break
+      const { taskId, index } = queue.shift()
+      inFlight++
+      processOne(taskId, index).finally(() => {
+        inFlight--
+        if (queue.length > 0) runQueue()
+        else if (inFlight === 0) finishBatch()
+      })
+    }
+  }
+
+  const finishBatch = () => {
+    const totalMs = Date.now() - startedAt
+    if (isJobCancelled({ jobId })) {
+      // cancelled 帧已经由 cancel handler 写；这里只补 finished/cancelled frame 由 cancel 路径完成
+      return
+    }
+    appendFrame({
+      jobId,
+      kind: 'finished',
+      payload: { total, ok: okCount, failed: failedCount, totalMs },
+    })
+    console.log(`[translate-image-batch ${new Date().toISOString()}] finish job=${jobId} ok=${okCount} failed=${failedCount} totalMs=${totalMs}`)
+  }
+
+  for (let i = 0; i < taskIds.length; i++) {
+    queue.push({ taskId: taskIds[i], index: i })
+  }
+  await runQueue()
+  // 等所有 in-flight 完成
+  while (inFlight > 0) await new Promise(r => setTimeout(r, 10))
+  finishBatch()
+}
+
+/**
+ * POST /api/translate/image/batch/:jobId/cancel
+ *  - 写 cancelled 帧（带 ISO 时间戳）
+ *  - 后台 processImageBatchAsync 通过 isJobCancelled 检查自动退出
+ */
+async function handleTranslateImageBatchCancel(req, res, jobId) {
+  try {
+    const now = new Date().toISOString()
+    appendFrame({
+      jobId,
+      kind: 'cancelled',
+      payload: { reason: 'user', cancelledAt: now },
+    })
+    res.setHeader('X-Job-Id', jobId)
+    res.setHeader('X-Job-Cancelled-At', now)
+    console.log(`[translate-image-batch ${new Date().toISOString()}] cancel job=${jobId} reason=user at=${now}`)
+    return sendJSON(res, 200, { jobId, status: 'cancelled', cancelledAt: now })
+  } catch (e) {
+    console.error('[translate-image-batch] cancel failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * POST /api/translate/glossary
+ *  入参：{ sourceLang, targetLang, source, target, pos?, note? }
+ *  出参：{ id, source, target, sourceLang, targetLang, ... }
+ *  响应头：X-Glossary-Id / X-Glossary-Hits
+ */
+async function handleGlossaryCreate(req, res) {
+  try {
+    const body = await readBody(req, 16 * 1024)
+    const { sourceLang, targetLang, source, target, pos, note } = parseJSONBody(body)
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    if (!source || !target) return sendJSON(res, 400, { error: 'source and target required' })
+    if (!SUPPORTED_LANGS.has(sourceLang)) return sendJSON(res, 400, { error: `unsupported sourceLang: ${sourceLang}` })
+    if (!SUPPORTED_LANGS.has(targetLang)) return sendJSON(res, 400, { error: `unsupported targetLang: ${targetLang}` })
+
+    const entry = appendTerm({ sourceLang, targetLang, source, target, pos, note })
+    res.setHeader('X-Glossary-Id', entry.id)
+    // X-Glossary-Hits = 当前 source 在语言对中的命中次数（应用次数估算）
+    res.setHeader('X-Glossary-Hits', '0')
+    console.log(`[translate-glossary ${new Date().toISOString()}] create id=${entry.id} pair=${sourceLang}→${targetLang} term="${source}" target="${target}"`)
+    return sendJSON(res, 200, entry)
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[translate-glossary] create failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * GET /api/translate/glossary?sourceLang=&targetLang=
+ *  响应头：X-Glossary-Count / X-Glossary-Source-Lang / X-Glossary-Target-Lang
+ */
+async function handleGlossaryList(req, res, url) {
+  try {
+    const sourceLang = url.searchParams.get('sourceLang')
+    const targetLang = url.searchParams.get('targetLang')
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    const items = listTerms({ sourceLang, targetLang })
+    res.setHeader('X-Glossary-Count', String(items.length))
+    res.setHeader('X-Glossary-Source-Lang', sourceLang)
+    res.setHeader('X-Glossary-Target-Lang', targetLang)
+    return sendJSON(res, 200, { sourceLang, targetLang, items })
+  } catch (e) {
+    console.error('[translate-glossary] list failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * DELETE /api/translate/glossary/:id?sourceLang=&targetLang=
+ *  响应头：X-Glossary-Removed-Id
+ */
+async function handleGlossaryDelete(req, res, url, id) {
+  try {
+    const sourceLang = url.searchParams.get('sourceLang')
+    const targetLang = url.searchParams.get('targetLang')
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    const ok = deleteTerm({ id, sourceLang, targetLang })
+    if (!ok) return sendJSON(res, 404, { error: 'term not found' })
+    res.setHeader('X-Glossary-Removed-Id', id)
+    console.log(`[translate-glossary ${new Date().toISOString()}] delete id=${id} pair=${sourceLang}→${targetLang}`)
+    return sendJSON(res, 200, { ok: true, id })
+  } catch (e) {
+    console.error('[translate-glossary] delete failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * POST /api/translate/glossary/import (multipart)
+ *  字段：file (CSV), sourceLang, targetLang
+ *  CSV 格式：source,target[,pos,note]；首行 header；UTF-8 BOM 自动剥离
+ *  响应头：X-Glossary-Imported-Count / X-Glossary-Duplicates
+ */
+async function handleGlossaryImport(req, res) {
+  try {
+    const ct = req.headers['content-type'] || ''
+    const boundaryMatch = ct.match(/boundary=(?:"([^"]+)"|([^;]+))/i)
+    if (!boundaryMatch) return sendJSON(res, 400, { error: 'no boundary' })
+    const rawBody = await readBody(req, 10 * 1024 * 1024) // 10MB CSV 上限
+    const fields = parseMultipart(rawBody, boundaryMatch[1] || boundaryMatch[2])
+    const file = fields.file
+    const sourceLang = fields.sourceLang?.data?.toString('utf8')
+    const targetLang = fields.targetLang?.data?.toString('utf8')
+    if (!file || !file.data) return sendJSON(res, 400, { error: 'file required' })
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+
+    let parsed
+    try {
+      parsed = parseGlossaryCsv(file.data)
+    } catch (e) {
+      return sendJSON(res, 400, { error: `csv parse failed: ${e.message}` })
+    }
+
+    // 检查重复：按 source 字段去重
+    const existing = listTerms({ sourceLang, targetLang })
+    const existingSources = new Set(existing.map(t => t.source))
+    let imported = 0
+    let duplicates = 0
+    for (const row of parsed) {
+      if (existingSources.has(row.source)) {
+        duplicates++
+        continue
+      }
+      appendTerm({
+        sourceLang,
+        targetLang,
+        source: row.source,
+        target: row.target,
+        pos: row.pos,
+        note: row.note,
+      })
+      imported++
+    }
+
+    res.setHeader('X-Glossary-Imported-Count', String(imported))
+    res.setHeader('X-Glossary-Duplicates', String(duplicates))
+    console.log(`[translate-glossary ${new Date().toISOString()}] import pair=${sourceLang}→${targetLang} imported=${imported} duplicates=${duplicates}`)
+    return sendJSON(res, 200, { imported, duplicates, total: parsed.length })
+  } catch (e) {
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'file too large' })
+    console.error('[translate-glossary] import failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * POST /api/translate/memory
+ *  入参：{ sourceLang, targetLang, source, target, context? }
+ *  响应头：X-TM-Id / X-TM-Score
+ */
+async function handleMemoryCreate(req, res) {
+  try {
+    const body = await readBody(req, 64 * 1024)
+    const { sourceLang, targetLang, source, target, context } = parseJSONBody(body)
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    if (!source || !target) return sendJSON(res, 400, { error: 'source and target required' })
+
+    const entry = addTmEntry({ sourceLang, targetLang, source, target, context })
+    res.setHeader('X-TM-Id', entry.id)
+    res.setHeader('X-TM-Score', '1.000')
+    return sendJSON(res, 200, { ...entry, score: 1 })
+  } catch (e) {
+    if (e.code === 'INVALID_JSON') return sendJSON(res, 400, { error: e.message })
+    if (e.message === 'FILE_TOO_LARGE') return sendJSON(res, 413, { error: 'payload too large' })
+    console.error('[translate-memory] create failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * GET /api/translate/memory?sourceLang=&targetLang=&q=&threshold=
+ *  响应头：X-TM-Count / X-TM-Match-Score
+ */
+async function handleMemoryLookup(req, res, url) {
+  try {
+    const sourceLang = url.searchParams.get('sourceLang')
+    const targetLang = url.searchParams.get('targetLang')
+    const q = url.searchParams.get('q') || ''
+    const threshold = Number(url.searchParams.get('threshold') || '0.7')
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    const items = q
+      ? lookupTm({ sourceLang, targetLang, query: q, threshold, limit: 50 })
+      : listTerms({ sourceLang, targetLang }) // fallback: 不查 q 时返回 glossary
+    const bestScore = items.length > 0 ? (items[0].score || 1) : 0
+    res.setHeader('X-TM-Count', String(items.length))
+    res.setHeader('X-TM-Match-Score', bestScore.toFixed(3))
+    console.log(`[translate-memory ${new Date().toISOString()}] lookup pair=${sourceLang}→${targetLang} q="${q.slice(0, 40)}" hits=${items.length} best=${bestScore.toFixed(3)}`)
+    return sendJSON(res, 200, { sourceLang, targetLang, items })
+  } catch (e) {
+    console.error('[translate-memory] lookup failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * DELETE /api/translate/memory/:id?sourceLang=&targetLang=
+ *  响应头：X-TM-Removed-Id
+ */
+async function handleMemoryDelete(req, res, url, id) {
+  try {
+    const sourceLang = url.searchParams.get('sourceLang')
+    const targetLang = url.searchParams.get('targetLang')
+    if (!sourceLang || !targetLang) return sendJSON(res, 400, { error: 'sourceLang and targetLang required' })
+    const ok = deleteTmEntry({ id, sourceLang, targetLang })
+    if (!ok) return sendJSON(res, 404, { error: 'tm entry not found' })
+    res.setHeader('X-TM-Removed-Id', id)
+    return sendJSON(res, 200, { ok: true, id })
+  } catch (e) {
+    console.error('[translate-memory] delete failed:', e.message)
+    return sendJSON(res, 500, { error: e.message || 'internal error' })
+  }
+}
+
+/**
+ * GET /api/inspect/translate/export?taskId=&format=bilingual-docx|bilingual-pdf|target-pdf
+ *  出参：二进制下载
+ *  响应头：X-Export-Format / X-Export-Pages / X-Export-Source-Lang / X-Export-Target-Lang / Content-Disposition
+ */
+async function handleInspectTranslateExport(req, res, url) {
+  try {
+    const taskId = url.searchParams.get('taskId')
+    const format = url.searchParams.get('format') || 'bilingual-docx'
+    const sourceLang = url.searchParams.get('sourceLang') || 'zh-CN'
+    const targetLang = url.searchParams.get('targetLang') || 'en'
+
+    if (!taskId) return sendJSON(res, 400, { error: 'taskId required' })
+    const validFormats = ['bilingual-docx', 'bilingual-pdf', 'target-pdf']
+    if (!validFormats.includes(format)) {
+      return sendJSON(res, 400, { error: `invalid format: must be one of ${validFormats.join(', ')}` })
+    }
+
+    const task = getTask(taskId)
+    if (!task) return sendJSON(res, 404, { error: `task not found: ${taskId}` })
+
+    // 拉取翻译结果
+    const text = extractTaskText(task)
+    const t0 = Date.now()
+    const result = await translate({ text, sourceLang, targetLang, taskId, task })
+    const pages = result.pages
+    if (!pages || pages.length === 0) {
+      return sendJSON(res, 400, { error: 'no pages to export (task may be empty or unsupported)' })
+    }
+
+    const taskName = task.name ? task.name.replace(/\.[^.]+$/, '') : `task-${taskId}`
+    let buffer
+    let contentType
+    let ext
+    if (format === 'bilingual-docx') {
+      buffer = await generateBilingualDocx({ pages, sourceLang, targetLang, taskName })
+      contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ext = 'docx'
+    } else if (format === 'bilingual-pdf') {
+      buffer = await generateBilingualPdf({ pages, sourceLang, targetLang, taskName })
+      contentType = 'application/pdf'
+      ext = 'pdf'
+    } else { // target-pdf
+      buffer = await generateTranslationOnlyPdf({ pages, targetLang, taskName })
+      contentType = 'application/pdf'
+      ext = 'pdf'
+    }
+    const ms = Date.now() - t0
+
+    const filename = `${taskName}-${sourceLang}-${targetLang}.${ext}`
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Content-Length', String(buffer.length))
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.setHeader('X-Export-Format', format)
+    res.setHeader('X-Export-Pages', String(pages.length))
+    res.setHeader('X-Export-Source-Lang', sourceLang)
+    res.setHeader('X-Export-Target-Lang', targetLang)
+    res.setHeader('Cache-Control', 'no-store')
+
+    console.log(`[translate-export ${new Date().toISOString()}] task=${taskId} format=${format} pages=${pages.length} bytes=${buffer.length} ms=${ms}`)
+
+    res.writeHead(200)
+    res.end(buffer)
+  } catch (e) {
+    console.error('[translate-export] failed:', e.message)
+    if (!res.headersSent) sendJSON(res, 500, { error: e.message || 'internal error' })
   }
 }

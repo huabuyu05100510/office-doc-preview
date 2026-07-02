@@ -1,9 +1,11 @@
 // 模型：claude-sonnet-4-6
-// AppRouter — wraps the app with BrowserRouter and provides route-driven layout
-// Phase 0: minimal; Phase 1 adds route-level lazy loading and transitions
+// AppRouter — pass-through wrapper that logs route changes.
+// BrowserRouter is now hoisted to main.tsx so App itself can call useLocation()
+// (Phase 0 bugfix: useLocation() requires Router context, so the provider must
+// sit above any component that consumes the router state).
 
 import { ReactNode } from 'react'
-import { BrowserRouter, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import { routeToMenuKey, MenuKey } from '../routes'
 
 export interface AppRouterProps {
@@ -20,9 +22,9 @@ function RouteLogger() {
 
 export function AppRouter({ children }: AppRouterProps) {
   return (
-    <BrowserRouter>
+    <>
       <RouteLogger />
       {children}
-    </BrowserRouter>
+    </>
   )
 }

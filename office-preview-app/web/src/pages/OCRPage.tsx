@@ -6,7 +6,8 @@
 //   - 讯飞设计稿/图片识别及标注.png  → 图片识别模式
 //   - 讯飞设计稿/OCR训练模板编辑.png → 模板编辑模式
 //   - 讯飞设计稿/OCR训练模板管理.png → 模板管理模式
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { ImageRegionSvgOverlay } from '../components/ImageRegionSvgOverlay'
 import { ScanIcon } from '../design/icons'
 import { useStore } from '../store'
 import type { Task } from '../types'
@@ -200,6 +201,20 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
     ? x / ocrResult.imageSize.width * imgDisplayW * (zoom / 100)
     : x * (zoom / 100)
 
+  // Phase C：refactored — 使用 ImageRegionSvgOverlay 组件 (testIdPrefix='ocr-region-')
+  // 仍然保留 tooltip / hover 业务逻辑
+  const scaledRegions = useMemo(() => {
+    if (!ocrResult?.regions) return []
+    return ocrResult.regions.map(r => ({
+      text: r.text,
+      confidence: r.confidence,
+      x: scale(r.x),
+      y: scale(r.y),
+      width: scale(r.width),
+      height: scale(r.height),
+    }))
+  }, [ocrResult?.regions, imgDisplayW, zoom])
+
   // 构造 JSON 结果
   const jsonResult = ocrResult ? JSON.stringify({
     engine: ocrResult.engine,
@@ -335,54 +350,34 @@ function RecognizeMode({ imageTasks }: { imageTasks: Task[] }) {
                   style={{ maxWidth: '70vw', maxHeight: '70vh', display: 'block' }}
                 />
                 {ocrResult?.regions && ocrResult.regions.length > 0 && ocrResult.imageSize && (
-                  <svg
-                    data-testid="ocr-region-svg"
+                  <div
+                    data-testid="ocr-region-svg-wrap"
                     style={{
                       position: 'absolute', left: 0, top: 0,
                       width: '100%', height: '100%',
+                      pointerEvents: 'none',
                     }}
-                    viewBox={`0 0 ${imgDisplayW} ${imgDisplayW / ocrResult.imageSize.width * ocrResult.imageSize.height}`}
                   >
-                    {ocrResult.regions.map((reg, i) => {
-                      const c = reg.confidence || 0.9
-                      const color = c >= 0.8 ? 'var(--color-success)' : c >= 0.5 ? 'var(--color-warning)' : 'var(--color-danger)'
-                      const fill = c >= 0.8 ? 'rgba(82,196,26,0.12)' : c >= 0.5 ? 'rgba(250,173,20,0.12)' : 'rgba(255,77,79,0.12)'
-                      const isHovered = hoveredIdx === i
-                      return (
-                        <g key={i}>
-                          <rect
-                            data-testid={`ocr-region-rect-${i}`}
-                            x={scale(reg.x)} y={scale(reg.y)}
-                            width={scale(reg.width)} height={scale(reg.height)}
-                            fill={isHovered ? 'rgba(22,119,255,0.25)' : fill}
-                            stroke={isHovered ? 'var(--color-primary)' : color}
-                            strokeWidth={isHovered ? '3' : '1.5'}
-                            rx="2"
-                            style={{ cursor: 'pointer', transition: 'all 120ms' }}
-                            onMouseEnter={() => { setHoveredIdx(i); setTooltipPos({ x: scale(reg.x), y: scale(reg.y) }) }}
-                            onMouseLeave={() => { setHoveredIdx(null); setTooltipPos(null) }}
-                          >
-                            <title>{reg.text || '(空)'} · 置信度 {Math.round((reg.confidence || 0) * 100)}%</title>
-                          </rect>
-                          {scale(reg.width) > 30 && (
-                            <text
-                              x={scale(reg.x) + 4}
-                              y={scale(reg.y) + 14}
-                              style={{
-                                fontSize: 11, fontWeight: 700,
-                                fill: '#fff',
-                                stroke: color, strokeWidth: 3,
-                                paintOrder: 'stroke fill',
-                                pointerEvents: 'none',
-                              }}
-                            >
-                              #{i + 1}
-                            </text>
-                          )}
-                        </g>
-                      )
-                    })}
-                  </svg>
+                    <ImageRegionSvgOverlay
+                      regions={scaledRegions}
+                      imageSize={{
+                        width: imgDisplayW,
+                        height: imgDisplayW / ocrResult.imageSize.width * ocrResult.imageSize.height,
+                      }}
+                      hoveredIdx={hoveredIdx}
+                      selectedIdx={null}
+                      onHover={(i) => {
+                        setHoveredIdx(i)
+                        if (i == null) { setTooltipPos(null); return }
+                        const r = scaledRegions[i]
+                        if (r) setTooltipPos({ x: r.x, y: r.y })
+                      }}
+                      onClick={() => { /* no-op (Phase 4+ 选中区域编辑) */ }}
+                      scanLine={false}
+                      testIdPrefix="ocr-region-"
+                      svgTestId="ocr-region-svg"
+                    />
+                  </div>
                 )}
               </>
             ) : (

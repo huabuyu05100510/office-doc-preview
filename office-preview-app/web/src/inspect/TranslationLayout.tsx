@@ -554,7 +554,22 @@ function ThumbText({ text }: { text: string }) {
   )
 }
 
-export function TranslationLayout() {
+/**
+ * TranslationLayout props (Phase B hook for download button wiring)
+ *
+ * TranslationLayout was previously a no-arg function driven entirely by zustand.
+ * Phase B adds an OPTIONAL `onDownload` prop so embedded callers (e.g.
+ * DocTranslateStagePanel) can capture clicks on the download button. If omitted
+ * the button is rendered but the click becomes a no-op — preserving the
+ * existing InspectCompareModal usage.
+ */
+export interface TranslationLayoutProps {
+  /** Optional callback for the download button. Omit for no-op behavior. */
+  onDownload?: () => void
+}
+
+export function TranslationLayout(props: TranslationLayoutProps = {}) {
+  const { onDownload } = props
   const source = useStore(s => s.translateSource)
   const sourceLang = useStore(s => s.translateSourceLang)
   const targetLang = useStore(s => s.translateTargetLang)
@@ -1115,7 +1130,15 @@ export function TranslationLayout() {
           <button type="button" className="icm-fmt-btn" onClick={copyTarget} title="复制译文" data-testid="translate-copy-target">🌐</button>
           <button type="button" className="icm-fmt-btn" onClick={copyBilingual} title="复制双语对照" data-testid="translate-copy-bilingual">📋</button>
           <span className="icm-fmt-sep" />
-          <button type="button" className="icm-fmt-btn" title="下载">⬇</button>
+          <button
+            type="button"
+            className="icm-fmt-btn"
+            title="下载"
+            data-testid="translate-layout-download"
+            data-has-handler={onDownload ? 'true' : 'false'}
+            onClick={() => onDownload?.()}
+            aria-label="下载双语文档"
+          >⬇</button>
         </div>
       </div>
 

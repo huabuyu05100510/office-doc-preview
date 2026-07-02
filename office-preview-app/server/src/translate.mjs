@@ -10,11 +10,54 @@
 // 关键设计：翻译场景每段 1:1 配对，不应被 Myers paragraphDiff 错位打散。
 // 这里直接用每段 source ↔ target 的 myersDiff 生成 charOps，确保 paragraphBlocks[i]
 // 与 segments[i] 严格对齐（前端 DualColumnView 按 pairId 渲染 + 联动高亮）。
+//
+// v4.3 扩展（Phase A.2）：
+//   - translatePagesAsync 新增 onPageProgress 回调（每页后 await，便于 cancel 检查）
+//   - translate() 新增 jobId / glossary / tm 参数
+//   - meta 增加 glossaryHits / tmHits / sourceWords / targetWords / mode / jobId
+//   - jobId 模式下自动 appendFrame('started' / 'page-done' / 'finished' / 'failed' / 'cancelled')
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { splitParagraphs, myersDiff } from './diff.mjs'
 import { translateAI, getActiveProvider } from './translate-provider.mjs'
+import { appendFrame, isJobCancelled } from './translate-jobs.mjs'
+import { applyGlossary as applyGlossaryFn } from './translate-glossary.mjs'
+import { lookupTm } from './translate-memory.mjs'
+
+/** v4.3：被 abort/cancel 触发的特殊错误，标志翻译循环在页面边界中断 */
+export class CancelledError extends Error {
+  constructor(jobId, lastPage) {
+    super(`translate cancelled for jobId=${jobId} at page=${lastPage}`)
+    this.name = 'CancelledError'
+    this.jobId = jobId
+    this.lastPage = lastPage
+  }
+}
+
+/** 简单 wrapper：计算 glossary 在 text 中的命中次数（大小写不敏感，可重叠） */
+function countGlossaryHits(text, glossary) {
+  if (typeof text !== 'string' || !Array.isArray(glossary) || glossary.length === 0) return 0
+  let count = 0
+  const lower = text.toLowerCase()
+  for (const g of glossary) {
+    if (!g || typeof g.source !== 'string' || !g.source) continue
+    const needle = g.source.toLowerCase()
+    if (!needle) continue
+    let idx = 0
+    while ((idx = lower.indexOf(needle, idx)) !== -1) {
+      count++
+      idx += needle.length
+    }
+  }
+  return count
+}
+
+/** 字数（按 \s+ split 空白） */
+function wordCount(text) {
+  if (typeof text !== 'string' || !text) return 0
+  return text.split(/\s+/).filter(Boolean).length
+}
 
 /** 支持的语言（与前端 LangCode 对齐） */
 export const SUPPORTED_LANGS = new Set(['zh-CN', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'ru'])
@@ -210,17 +253,29 @@ async function translateSegmentsAsync(paragraphs, sourceLang, targetLang) {
 
 /**
  * 批量翻译 task.pages（PDF/DOCX 多页）
+ * v4.3：新增 opts.onPageProgress(page, index, total, ms) — 每页翻译后 await 调用，
+ *       便于调用方做取消检查、写入 JSONL 进度帧等。
+ * @param {object} task
+ * @param {string} targetLang
+ * @param {string} sourceLang
+ * @param {{ onPageProgress?: (page: number, index: number, total: number, ms: number) => Promise<void>|void }} [opts]
  * @returns {Promise<Array<{page, sourceText, targetText, charMap, pageW, pageH, startLine, endLine}>>}
  */
-async function translatePagesAsync(task, targetLang, sourceLang) {
+async function translatePagesAsync(task, targetLang, sourceLang, opts = {}) {
   const results = []
-  for (const p of task.pages) {
+  const total = Array.isArray(task.pages) ? task.pages.length : 0
+  for (let i = 0; i < task.pages.length; i++) {
+    const p = task.pages[i]
     const text = p.text || readPageTextFromTextDir(task, p.page)
+    const t0 = Date.now()
     if (!text || !text.trim()) {
       results.push({
         page: p.page, sourceText: text || '', targetText: text || '',
         charMap: [], pageW: p.width || 794, pageH: p.height || 1123, startLine: 1, endLine: 1,
       })
+      if (typeof opts.onPageProgress === 'function') {
+        await opts.onPageProgress(p.page, i, total, Date.now() - t0)
+      }
       continue
     }
     try {
@@ -240,6 +295,9 @@ async function translatePagesAsync(task, targetLang, sourceLang) {
         page: p.page, sourceText: text, targetText: text,
         charMap: [], pageW: p.width || 794, pageH: p.height || 1123, startLine: 1, endLine: 1,
       })
+    }
+    if (typeof opts.onPageProgress === 'function') {
+      await opts.onPageProgress(p.page, i, total, Date.now() - t0)
     }
   }
   return results
@@ -289,81 +347,283 @@ async function paginateTextAsync(text, { linesPerPage = 30, pageW = 794, pageH =
 
 /**
  * 翻译入口
- * @param {{ text: string, sourceLang: string, targetLang: string, taskId?: string, linesPerPage?: number, pageW?: number, pageH?: number, task?: object }} opts
- * @returns {{ sourceLang, targetLang, segments, paragraphBlocks, pages, ms, meta }}
+ * v4.3：新增 jobId / glossary / tm / onPageProgress 参数
+ *  - jobId: 启用 JSONL 进度日志（started / page-done / finished / failed / cancelled）
+ *  - glossary: 翻译前应用术语表（保留一致性）
+ *  - tm: 翻译后用 lookupTm 查命中率（写入 meta.tmHits）
+ *  - onPageProgress: 每页翻译后回调（caller 可注入取消检查逻辑）
+ *
+ * @param {{
+ *   text: string,
+ *   sourceLang: string,
+ *   targetLang: string,
+ *   taskId?: string,
+ *   strategy?: string,
+ *   linesPerPage?: number,
+ *   pageW?: number,
+ *   pageH?: number,
+ *   task?: object|null,
+ *   jobId?: string,
+ *   glossary?: Array,
+ *   tm?: Array,
+ *   onPageProgress?: (page: number, index: number, total: number, ms: number) => Promise<void>|void
+ * }} opts
+ * @returns {Promise<{sourceLang, targetLang, segments, paragraphBlocks, pages, ms, meta}>}
  */
-export async function translate({ text, sourceLang, targetLang, taskId, strategy, linesPerPage = 30, pageW = 794, pageH = 1123, task = null }) {
+export async function translate({
+  text, sourceLang, targetLang, taskId, strategy,
+  linesPerPage = 30, pageW = 794, pageH = 1123, task = null,
+  jobId = null, glossary = null, tm = null, onPageProgress = null,
+}) {
   const t0 = Date.now()
   if (!SUPPORTED_LANGS.has(sourceLang)) throw new Error(`unsupported sourceLang: ${sourceLang}`)
   if (!SUPPORTED_LANGS.has(targetLang)) throw new Error(`unsupported targetLang: ${targetLang}`)
 
-  // v4.0：DOCX/PDF 任务走真实 AI 翻译（有 API key 时）或 identity mock
-  if (task && (task.ext === 'docx' || task.ext === 'pdf' || task.previewExt === 'docx' || task.previewExt === 'pdf') && Array.isArray(task.pages) && task.pages.length > 0) {
-    const provider = strategy === 'synthetic' ? undefined : (process.env.TRANSLATE_PROVIDER || 'mock')
-    const isMock = provider === 'mock' || !process.env[`${provider?.toUpperCase?.()}_API_KEY`]
-
-    if (isMock) {
-      const identityPages = buildIdentityPagesFromTask(task, targetLang)
-      const ms = Date.now() - t0
-      const sourceChars = identityPages.reduce((n, p) => n + Array.from(p.sourceText || '').length, 0)
-      return {
+  // ============ v4.3: jobId 启动帧 ============
+  if (jobId) {
+    const totalPages = task && Array.isArray(task.pages) ? task.pages.length : 0
+    appendFrame({
+      jobId,
+      kind: 'started',
+      payload: {
+        totalPages,
+        glossaryCount: Array.isArray(glossary) ? glossary.length : 0,
+        tmCount: Array.isArray(tm) ? tm.length : 0,
         sourceLang, targetLang,
-        segments: identityPages.map((p, i) => ({ index: i, source: p.sourceText, target: p.targetText })),
-        paragraphBlocks: identityPages.map(p => p.sourceText === p.targetText
-          ? { kind: 'equal', leftText: p.sourceText, rightText: p.targetText }
-          : { kind: 'change', leftText: p.sourceText, rightText: p.targetText, charOps: myersDiff(p.sourceText, p.targetText) }
-        ),
-        pages: identityPages,
-        ms,
-        meta: { segmentsCount: identityPages.length, pagesCount: identityPages.length, sourceChars, targetChars: sourceChars, engine: 'identity-mock-v1' },
+        ts: new Date().toISOString(),
+      },
+    })
+    console.log(`[translate-job ${new Date().toISOString()}] job=${jobId} started pages=${totalPages} src=${sourceLang} tgt=${targetLang} glossary=${Array.isArray(glossary) ? glossary.length : 0} tm=${Array.isArray(tm) ? tm.length : 0}`)
+  }
+
+  // v4.3：jobId 模式下，caller 注入的 onPageProgress 包装一层
+  //   1. 检查 isJobCancelled
+  //   2. 写入 page-done 帧
+  //   3. 跟踪 lastPage / lastAttemptedPage（错误帧用）
+  let lastPage = 0
+  let lastAttemptedPage = 0
+  const wrappedOnPageProgress = jobId
+    ? async (page, index, total, ms) => {
+        // 0) 跟踪最近尝试的页（即使后续抛错也保留）
+        lastAttemptedPage = page
+        // 1) 取消检查
+        if (isJobCancelled({ jobId })) {
+          const err = new CancelledError(jobId, page)
+          throw err
+        }
+        // 2) caller 自定义回调（如有）
+        if (typeof onPageProgress === 'function') {
+          await onPageProgress(page, index, total, ms)
+        }
+        // 3) 写入 page-done 帧（payload 含 sourceChars/targetChars/glossaryHits/tmHits）
+        const pageData = (task && Array.isArray(task.pages)) ? task.pages[index] : null
+        const sourceText = pageData ? (pageData.text || '') : ''
+        appendFrame({
+          jobId,
+          kind: 'page-done',
+          payload: {
+            page, totalPages: total, ms,
+            sourceChars: Array.from(sourceText).length,
+            targetChars: 0, // 由 caller / 后续 steps 补充
+            glossaryHits: 0,
+            tmHits: 0,
+          },
+        })
+        lastPage = page
+      }
+    : onPageProgress
+
+  // ============ v4.3: 取消检查包裹 translatePagesAsync 调用 ============
+  let docResult = null
+  try {
+    // v4.0：DOCX/PDF 任务走真实 AI 翻译（有 API key 时）或 identity mock
+    if (task && (task.ext === 'docx' || task.ext === 'pdf' || task.previewExt === 'docx' || task.previewExt === 'pdf') && Array.isArray(task.pages) && task.pages.length > 0) {
+      const provider = strategy === 'synthetic' ? undefined : (process.env.TRANSLATE_PROVIDER || 'mock')
+      const isMock = provider === 'mock' || !process.env[`${provider?.toUpperCase?.()}_API_KEY`]
+
+      if (isMock) {
+        const identityPages = buildIdentityPagesFromTask(task, targetLang)
+        // v4.3：identity mock 路径也要逐页触发 onPageProgress（jobId 模式下写 page-done 帧）
+        if (typeof wrappedOnPageProgress === 'function') {
+          for (let i = 0; i < identityPages.length; i++) {
+            await wrappedOnPageProgress(identityPages[i].page, i, identityPages.length, 0)
+          }
+        }
+        const ms = Date.now() - t0
+        const sourceChars = identityPages.reduce((n, p) => n + Array.from(p.sourceText || '').length, 0)
+        const sourceWords = identityPages.reduce((n, p) => n + wordCount(p.sourceText || ''), 0)
+        const targetWords = identityPages.reduce((n, p) => n + wordCount(p.targetText || ''), 0)
+        const fullSourceText = identityPages.map(p => p.sourceText || '').join('\n')
+        const fullTargetText = identityPages.map(p => p.targetText || '').join('\n')
+        const glossaryHits = Array.isArray(glossary) ? countGlossaryHits(fullSourceText, glossary) : 0
+        const tmHits = (Array.isArray(tm) && tm.length > 0)
+          ? lookupTm({ sourceLang, targetLang, query: fullSourceText, threshold: 0.7, limit: 200 }).length
+          : 0
+        docResult = {
+          sourceLang, targetLang,
+          segments: identityPages.map((p, i) => ({ index: i, source: p.sourceText, target: p.targetText })),
+          paragraphBlocks: identityPages.map(p => p.sourceText === p.targetText
+            ? { kind: 'equal', leftText: p.sourceText, rightText: p.targetText }
+            : { kind: 'change', leftText: p.sourceText, rightText: p.targetText, charOps: myersDiff(p.sourceText, p.targetText) }
+          ),
+          pages: identityPages,
+          ms,
+          meta: {
+            segmentsCount: identityPages.length, pagesCount: identityPages.length,
+            sourceChars, targetChars: sourceChars,
+            sourceWords, targetWords,
+            glossaryHits, tmHits,
+            mode: 'doc',
+            engine: 'identity-mock-v1',
+            ...(jobId ? { jobId } : {}),
+          },
+        }
+      } else {
+        // Real AI translation per page
+        const translatedPages = await translatePagesAsync(task, targetLang, sourceLang, {
+          onPageProgress: wrappedOnPageProgress,
+        })
+        const ms = Date.now() - t0
+        const sourceChars = translatedPages.reduce((n, p) => n + Array.from(p.sourceText || '').length, 0)
+        const targetChars = translatedPages.reduce((n, p) => n + Array.from(p.targetText || '').length, 0)
+        const sourceWords = translatedPages.reduce((n, p) => n + wordCount(p.sourceText || ''), 0)
+        const targetWords = translatedPages.reduce((n, p) => n + wordCount(p.targetText || ''), 0)
+        const fullSourceText = translatedPages.map(p => p.sourceText || '').join('\n')
+        const fullTargetText = translatedPages.map(p => p.targetText || '').join('\n')
+        const glossaryHits = Array.isArray(glossary) ? countGlossaryHits(fullSourceText, glossary) : 0
+        const tmHits = (Array.isArray(tm) && tm.length > 0)
+          ? lookupTm({ sourceLang, targetLang, query: fullSourceText, threshold: 0.7, limit: 200 }).length
+          : 0
+        docResult = {
+          sourceLang, targetLang,
+          segments: translatedPages.map((p, i) => ({ index: i, source: p.sourceText, target: p.targetText })),
+          paragraphBlocks: translatedPages.map(p => p.sourceText === p.targetText
+            ? { kind: 'equal', leftText: p.sourceText, rightText: p.targetText }
+            : { kind: 'change', leftText: p.sourceText, rightText: p.targetText, charOps: myersDiff(p.sourceText, p.targetText) }
+          ),
+          pages: translatedPages,
+          ms,
+          meta: {
+            segmentsCount: translatedPages.length, pagesCount: translatedPages.length,
+            sourceChars, targetChars,
+            sourceWords, targetWords,
+            glossaryHits, tmHits,
+            mode: 'doc',
+            engine: getActiveProvider() + '-v1',
+            ...(jobId ? { jobId } : {}),
+          },
+        }
       }
     }
 
-    // Real AI translation per page
-    const translatedPages = await translatePagesAsync(task, targetLang, sourceLang)
+    if (docResult) {
+      // jobId 模式下写 finished 帧
+      if (jobId) {
+        appendFrame({
+          jobId,
+          kind: 'finished',
+          payload: {
+            totalPages: docResult.pages.length,
+            totalMs: docResult.ms,
+            glossaryHits: docResult.meta.glossaryHits,
+            tmHits: docResult.meta.tmHits,
+            sourceWords: docResult.meta.sourceWords,
+            targetWords: docResult.meta.targetWords,
+          },
+        })
+        console.log(`[translate-job ${new Date().toISOString()}] job=${jobId} finished pages=${docResult.pages.length} totalMs=${docResult.ms} words=${docResult.meta.sourceWords}`)
+      }
+      return docResult
+    }
+
+    // ============ 文本模式（无 task.pages）============
+    const paragraphs = splitParagraphs(text || '')
+    // 应用术语表：before AI translation（保留一致性）
+    const paragraphsForAI = Array.isArray(glossary) && glossary.length > 0
+      ? paragraphs.map(p => applyGlossaryFn(p, glossary))
+      : paragraphs
+
+    // 1) 段级 AI 翻译（批量 + 异步）
+    const translatedSegments = await translateSegmentsAsync(paragraphsForAI, sourceLang, targetLang)
+
+    // 段级 glossary 应用（target 也是术语命中区）
+    const finalSegments = translatedSegments.map((t, i) =>
+      Array.isArray(glossary) && glossary.length > 0 ? applyGlossaryFn(t, glossary) : t
+    )
+
+    const segments = paragraphs.map((src, i) => ({
+      index: i,
+      source: src,
+      target: finalSegments[i] || src,
+    }))
+
+    // 2) 段落块
+    const paragraphBlocks = segments.map(seg => {
+      if (seg.source === seg.target) return { kind: 'equal', leftText: seg.source, rightText: seg.target }
+      return { kind: 'change', leftText: seg.source, rightText: seg.target, charOps: myersDiff(seg.source, seg.target) }
+    })
+
+    // 3) 按页输出
+    const pages = await paginateTextAsync(text || '', { linesPerPage, pageW, pageH, targetLang, sourceLang })
+
     const ms = Date.now() - t0
-    const sourceChars = translatedPages.reduce((n, p) => n + Array.from(p.sourceText || '').length, 0)
-    const targetChars = translatedPages.reduce((n, p) => n + Array.from(p.targetText || '').length, 0)
-    return {
-      sourceLang, targetLang,
-      segments: translatedPages.map((p, i) => ({ index: i, source: p.sourceText, target: p.targetText })),
-      paragraphBlocks: translatedPages.map(p => p.sourceText === p.targetText
-        ? { kind: 'equal', leftText: p.sourceText, rightText: p.targetText }
-        : { kind: 'change', leftText: p.sourceText, rightText: p.targetText, charOps: myersDiff(p.sourceText, p.targetText) }
-      ),
-      pages: translatedPages,
-      ms,
-      meta: { segmentsCount: translatedPages.length, pagesCount: translatedPages.length, sourceChars, targetChars, engine: getActiveProvider() + '-v1' },
+    const fullSourceText = segments.map(s => s.source).join('\n')
+    const fullTargetText = segments.map(s => s.target).join('\n')
+    const glossaryHits = Array.isArray(glossary) ? countGlossaryHits(fullSourceText, glossary) : 0
+    const tmHits = (Array.isArray(tm) && tm.length > 0)
+      ? lookupTm({ sourceLang, targetLang, query: fullSourceText, threshold: 0.7, limit: 200 }).length
+      : 0
+
+    const textResult = {
+      sourceLang, targetLang, segments, paragraphBlocks, pages, ms,
+      meta: {
+        segmentsCount: segments.length, pagesCount: pages.length,
+        sourceChars: Array.from(text || '').length,
+        targetChars: Array.from(segments.map(s => s.target).join('\n')).length,
+        sourceWords: wordCount(text || ''),
+        targetWords: wordCount(segments.map(s => s.target).join('\n')),
+        glossaryHits, tmHits,
+        mode: 'text',
+        engine: getActiveProvider() + '-v1',
+        ...(jobId ? { jobId } : {}),
+      },
     }
-  }
-
-  const paragraphs = splitParagraphs(text || '')
-  // 1) 段级 AI 翻译（批量 + 异步）
-  const translatedSegments = await translateSegmentsAsync(paragraphs, sourceLang, targetLang)
-  const segments = paragraphs.map((src, i) => ({
-    index: i,
-    source: src,
-    target: translatedSegments[i] || src,
-  }))
-
-  // 2) 段落块
-  const paragraphBlocks = segments.map(seg => {
-    if (seg.source === seg.target) return { kind: 'equal', leftText: seg.source, rightText: seg.target }
-    return { kind: 'change', leftText: seg.source, rightText: seg.target, charOps: myersDiff(seg.source, seg.target) }
-  })
-
-  // 3) 按页输出
-  const pages = await paginateTextAsync(text || '', { linesPerPage, pageW, pageH, targetLang, sourceLang })
-
-  const ms = Date.now() - t0
-  return {
-    sourceLang, targetLang, segments, paragraphBlocks, pages, ms,
-    meta: {
-      segmentsCount: segments.length, pagesCount: pages.length,
-      sourceChars: Array.from(text || '').length,
-      targetChars: Array.from(segments.map(s => s.target).join('\n')).length,
-      engine: getActiveProvider() + '-v1',
+    if (jobId) {
+      appendFrame({
+        jobId,
+        kind: 'finished',
+        payload: {
+          totalPages: textResult.pages.length,
+          totalMs: ms,
+          glossaryHits,
+          tmHits,
+          sourceWords: textResult.meta.sourceWords,
+          targetWords: textResult.meta.targetWords,
+        },
+      })
+      console.log(`[translate-job ${new Date().toISOString()}] job=${jobId} finished pages=${textResult.pages.length} totalMs=${ms} words=${textResult.meta.sourceWords}`)
     }
+    return textResult
+  } catch (e) {
+    if (jobId) {
+      const isCancel = e instanceof CancelledError || /cancel/i.test(String(e.message || ''))
+      if (isCancel) {
+        appendFrame({
+          jobId,
+          kind: 'cancelled',
+          payload: { page: e.lastPage, reason: 'user' },
+        })
+        console.log(`[translate-job ${new Date().toISOString()}] job=${jobId} cancelled at page=${e.lastPage} reason=user`)
+      } else {
+        appendFrame({
+          jobId,
+          kind: 'failed',
+          payload: { error: e.message || String(e), page: lastAttemptedPage || null },
+        })
+        console.error(`[translate-job ${new Date().toISOString()}] job=${jobId} failed error=${e.message || e}`)
+      }
+    }
+    throw e
   }
 }
 

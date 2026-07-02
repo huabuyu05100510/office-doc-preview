@@ -19,6 +19,11 @@ export type SemanticKey =
   | 'color-success' | 'color-success-bg' | 'color-warning' | 'color-warning-bg' | 'color-danger' | 'color-danger-bg' | 'color-info' | 'color-info-bg'
   // Diff
   | 'color-diff-delete' | 'color-diff-insert' | 'color-diff-active'
+  // ============ Translation UX Overhaul (Phase A.1 Agent 1) ============
+  | 'color-translate-stage-active' | 'color-translate-stage-done' | 'color-translate-stage-pending'
+  | 'color-annotation-kind-align' | 'color-annotation-kind-seg' | 'color-annotation-kind-alt'
+  | 'color-toast-success' | 'color-toast-error' | 'color-toast-info' | 'color-toast-warning'
+  | 'color-toast-bg'
 
 export const SEMANTIC_ALIASES: Record<SemanticKey, string> = {
   // Brand
@@ -65,6 +70,21 @@ export const SEMANTIC_ALIASES: Record<SemanticKey, string> = {
   'color-diff-delete':     'var(--red-3)',
   'color-diff-insert':     'var(--blue-3)',
   'color-diff-active':     'var(--indigo-6)',
+  // ============ Translation UX Overhaul (Phase A.1 Agent 1) ============
+  // Stage indicator colors
+  'color-translate-stage-active':  'var(--blue-7)',
+  'color-translate-stage-done':    'var(--green-5)',
+  'color-translate-stage-pending': 'var(--slate-3)',
+  // Annotation kind colors (shared with Agent 3)
+  'color-annotation-kind-align': 'var(--blue-6)',
+  'color-annotation-kind-seg':   'var(--green-6)',
+  'color-annotation-kind-alt':   'var(--purple-6)',
+  // Toast semantic colors
+  'color-toast-success': 'var(--green-6)',
+  'color-toast-error':   'var(--red-6)',
+  'color-toast-info':    'var(--blue-6)',
+  'color-toast-warning': 'var(--amber-6)',
+  'color-toast-bg':      'var(--color-bg)',
 }
 
 export const SEMANTIC_KEYS = Object.keys(SEMANTIC_ALIASES) as SemanticKey[]
@@ -113,6 +133,20 @@ export const DARK_OVERRIDES: Partial<Record<SemanticKey, string>> = {
   'color-warning-bg':      'rgba(250, 173, 20, 0.15)',
   'color-danger-bg':       'rgba(255, 77, 79, 0.15)',
   'color-info-bg':         'var(--color-primary-bg)',
+  // ============ Translation UX Overhaul (Phase A.1 Agent 1) ============
+  // Toast: keep semantic bg as solid color-bg in dark mode (slate-12), success/error/info/warning lighter for contrast
+  'color-toast-success': 'var(--green-5)',
+  'color-toast-error':   'var(--red-5)',
+  'color-toast-info':    'var(--blue-5)',
+  'color-toast-warning': 'var(--amber-5)',
+  // Stage indicator colors: shift one step lighter for dark contrast
+  'color-translate-stage-active':  'var(--blue-5)',
+  'color-translate-stage-done':    'var(--green-5)',
+  'color-translate-stage-pending': 'var(--slate-8)',
+  // Annotation kind colors: shift one step lighter
+  'color-annotation-kind-align': 'var(--blue-5)',
+  'color-annotation-kind-seg':   'var(--green-5)',
+  'color-annotation-kind-alt':   'var(--purple-5)',
 }
 
 export function darkToCSSVars(): string {

@@ -224,6 +224,41 @@ export interface ParagraphDiffBlock {
   charOps?: DiffOp[]
 }
 
+// ============ 图片翻译（OCR + 区域对齐翻译） ============
+
+/** OCR 识别出的单个文本区域 */
+export interface OCRRegion {
+  text: string
+  x: number
+  y: number
+  width: number
+  height: number
+  /** 0..1 */
+  confidence: number
+}
+
+/** /api/ocr/recognize 响应 */
+export interface OCRResult {
+  text: string
+  regions: OCRRegion[]
+  engine: string
+  ms: number
+  imageSize?: { width: number; height: number }
+}
+
+/** 批量翻译单项状态 */
+export type ImageBatchItemStatus = 'pending' | 'ocr-done' | 'image-done' | 'failed'
+
+/** 批量翻译单项 */
+export interface ImageBatchItem {
+  taskId: string
+  status: ImageBatchItemStatus
+  percent?: number
+}
+
+/** 批量翻译任务整体状态 */
+export type BatchStatus = 'idle' | 'started' | 'running' | 'completed' | 'failed' | 'cancelled'
+
 /** /api/inspect/diff 响应 */
 export interface InspectDiffResponse {
   ops: DiffOp[]
@@ -240,3 +275,64 @@ export interface InspectDiffResponse {
     errorCount: number
   }
 }
+
+// ============ Phase B：文档翻译 / 图片翻译新增类型 ============
+
+/** 翻译任务进度帧（JSONL polling 端点返回） */
+export type TranslateJobFrame = {
+  seq: number
+  ts: number
+  kind: 'started' | 'page-done' | 'ocr-done' | 'image-done' | 'finished' | 'failed' | 'cancelled' | 'paused' | 'resumed'
+  payload: Record<string, unknown>
+}
+
+/** 术语表条目 */
+export interface GlossaryTerm {
+  id: string
+  sourceLang: string
+  targetLang: string
+  source: string
+  target: string
+  pos?: string
+  note?: string
+}
+
+/** 翻译记忆条目 */
+export interface TmEntry {
+  id: string
+  sourceLang: string
+  targetLang: string
+  source: string
+  target: string
+  score?: number
+  context?: string
+}
+
+/** 文档翻译输出格式 */
+export type DocTranslateFormat = 'bilingual-docx' | 'bilingual-pdf' | 'target-pdf' | 'vtt'
+
+// ============ Translation UX Overhaul (Phase A.3 Agent 3) ============
+
+/** 翻译标注 — 对齐服务端 annotation-schema.mjs 的 TranslateAnnotation */
+export interface TranslateAnnotation {
+  id: string
+  kind: 'align_fix' | 'seg_rating' | 'alt_trans'
+  schemaVersion: 1
+  taskId: string
+  segmentId: string
+  url: string
+  domPath: string
+  srcText: string
+  tgtText: string
+  langPair: [string, string]
+  srcTokens: string[]
+  tgtTokens: string[]
+  predicted: Array<[number, number]>
+  modelVersion: string
+  payload: unknown
+  context: unknown
+  createdAt: number
+  updatedAt: number
+}
+
+export type AnnotationKind = TranslateAnnotation['kind']

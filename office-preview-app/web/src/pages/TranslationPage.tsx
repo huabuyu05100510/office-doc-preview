@@ -3,10 +3,16 @@
 // 模型：claude-sonnet-4-6
 // 布局：使用 xf-workspace（左侧子菜单 + 内容区），统一 QualityCheckPage 风格
 // 支持：实时翻译 / 文本翻译 / 文档翻译 / 图片翻译 / 音频翻译 / 视频翻译
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useStore } from '../store'
 import type { Task, LangCode } from '../types'
 import { LanguagesIcon, ArrowRightIcon, CopyIcon, SparkleIcon, RefreshIcon, FileTextIcon, ImageIcon, VideoIcon, MusicIcon, UploadIcon, BoltIcon } from '../design/icons'
+import { ImageTranslateMode as NewImageTranslateMode } from './ImageTranslateMode'
+import { DocTranslateStagePanel } from './DocTranslateStagePanel'
+import { Toast } from '../components/Toast'
+import { useToastStore } from '../hooks/useToast'
+import type { TranslateStage } from '../hooks/useTranslateStage'
 
 type TransMode = 'realtime' | 'text' | 'doc' | 'image' | 'audio' | 'video'
 
@@ -59,7 +65,7 @@ export function TranslationPage() {
         {mode === 'realtime' && <RealtimeTranslateMode />}
         {mode === 'text' && <TextTranslateMode />}
         {mode === 'doc' && <DocTranslateMode tasks={tasks} />}
-        {mode === 'image' && <ImageTranslateMode tasks={tasks} />}
+        {mode === 'image' && <NewImageTranslateMode tasks={tasks} />}
         {mode === 'audio' && <AudioTranslateMode tasks={tasks} />}
         {mode === 'video' && <VideoTranslateMode tasks={tasks} />}
       </div>
@@ -835,256 +841,61 @@ function TextTranslateMode() {
   )
 }
 
-/* ============ 文档翻译模式 ============ */
-function DocTranslateMode({ tasks }: { tasks: Task[] }) {
-  const [sourceLang, setSourceLang] = useState<LangCode>('zh-CN')
-  const [targetLang, setTargetLang] = useState<LangCode>('en')
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
-  const [translating, setTranslating] = useState(false)
-  const [result, setResult] = useState<{ pages: number; segments: number; engine: string; ms: number } | null>(null)
-  const [error, setError] = useState<string | null>(null)
+/* ============ 文档翻译模式（Phase B orchestrator） ============ */
+/**
+ * Phase B closed-loop wrapper:
+ * - URL state (search params) drives the 4-stage state machine
+ * - DocTranslateStagePanel re-fetches translation progress via useTranslateJob
+ * - <Toast /> mounted once at this boundary so all child pushes are visible
+ *
+ * Body reduced from 148 lines to ~60 lines. The old `<pre>` JSON dump and
+ * in-component job fetch have moved into DocTranslateStagePanel.
+ */
+export function DocTranslateMode({ tasks: _tasks }: { tasks: Task[] }) {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const rawStage = searchParams.get('stage')
+  const initialTaskId = searchParams.get('task') || undefined
 
-  const docTasks = tasks.filter(t => ['docx', 'pptx', 'xlsx', 'doc', 'ppt', 'xls', 'pdf', 'txt', 'md'].includes(t.ext))
+  // 显式校验 stage（非法值 → 'pick'，符合 useTranslateStage 行为）
+  const stage: TranslateStage =
+    rawStage === 'pick' || rawStage === 'translating' || rawStage === 'review' || rawStage === 'export'
+      ? rawStage
+      : 'pick'
 
-  const doTranslate = useCallback(async () => {
-    if (!selectedTask) return
-    setTranslating(true); setError(null)
-    const t0 = performance.now()
-    try {
-      const r = await fetch('/api/inspect/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ sourceLang, targetLang, taskId: selectedTask.id }),
-      })
-      if (!r.ok) throw new Error(`API ${r.status}`)
-      const data = await r.json()
-      setResult({
-        pages: data.meta?.pages || 1,
-        segments: data.segments?.length || 0,
-        engine: data.meta?.engine || 'unknown',
-        ms: Math.round(performance.now() - t0),
-      })
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setTranslating(false)
-    }
-  }, [selectedTask, sourceLang, targetLang])
+  const onStageChange = useCallback(
+    (s: TranslateStage) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('stage', s)
+          return next
+        },
+        { replace: false },
+      )
+    },
+    [setSearchParams],
+  )
+
+  const queue = useToastStore((s) => s.queue)
+  const dismissToast = useToastStore((s) => s.dismiss)
 
   return (
     <>
-      {/* 工具按钮条 */}
-      <div style={{
-        padding: '12px 24px',
-        borderBottom: '1px solid var(--xf-border-light)',
-        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-        background: 'var(--xf-bg-subtle)',
-      }}>
-        <select
-          className="xf-select"
-          value={sourceLang}
-          onChange={e => setSourceLang(e.target.value as LangCode)}
-          style={{ minWidth: 140 }}
-        >
-          {LANG_OPTIONS.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
-        </select>
-
-        <span style={{ color: 'var(--xf-text-tertiary)' }}>→</span>
-
-        <select
-          className="xf-select"
-          value={targetLang}
-          onChange={e => setTargetLang(e.target.value as LangCode)}
-          style={{ minWidth: 140 }}
-        >
-          {LANG_OPTIONS.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
-        </select>
-
-        <div style={{ flex: 1 }} />
-
-        <button
-          className="xf-btn-solid"
-          onClick={doTranslate}
-          disabled={!selectedTask || translating}
-          style={{ minWidth: 100 }}
-        >
-          {translating ? <><span className="xf-loading" /> 翻译中…</> : <><SparkleIcon size={14} /> 翻译文档</>}
-        </button>
-
-        {result && (
-          <span style={{ fontSize: 13, color: 'var(--xf-text-secondary)' }}>
-            {result.pages} 页 · {result.segments} 段 · {result.engine} · {result.ms}ms
-          </span>
-        )}
-      </div>
-
-      {error && (
-        <div style={{
-          padding: '8px 24px', background: 'var(--xf-danger-bg)',
-          borderBottom: '1px solid var(--xf-danger-border)',
-          color: 'var(--xf-danger)', fontSize: 13,
-        }}>
-          翻译失败：{error}
-        </div>
-      )}
-
-      {/* 文件选择 */}
-      <div style={{ padding: 24, flex: 1, overflow: 'auto' }}>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--xf-text)' }}>
-          选择文档（支持 docx/pptx/xlsx/pdf/txt/md）
-        </div>
-        {docTasks.length === 0 ? (
-          <div className="xf-empty">
-            <div className="xf-empty-icon"><UploadIcon size={32} /></div>
-            <div className="xf-empty-title">暂无可翻译文档</div>
-            <div className="xf-empty-desc">请先在「文档预览」上传文件</div>
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
-            {docTasks.map(t => (
-              <div
-                key={t.id}
-                className={`xf-file-card${selectedTask?.id === t.id ? ' selected' : ''}`}
-                onClick={() => setSelectedTask(t)}
-              >
-                <div className="xf-file-card-icon"><FileTextIcon size={24} /></div>
-                <div className="xf-file-card-name">{t.name}</div>
-                <div className="xf-file-card-ext">{t.ext.toUpperCase()}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <Toast queue={queue} onDismiss={dismissToast} />
+      <DocTranslateStagePanel
+        stage={stage}
+        onStageChange={onStageChange}
+        initialTaskId={initialTaskId}
+      />
     </>
   )
 }
 
 /* ============ 图片翻译模式 ============ */
-function ImageTranslateMode({ tasks }: { tasks: Task[] }) {
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
-  const [ocrText, setOcrText] = useState('')
-  const [translating, setTranslating] = useState(false)
-  const [result, setResult] = useState<string>('')
-  const [error, setError] = useState<string | null>(null)
+// Phase C：旧的 ImageTranslateMode 已被 src/pages/ImageTranslateMode.tsx 取代
+// 通过 import { ImageTranslateMode as NewImageTranslateMode } from './ImageTranslateMode'
+// 在主组件中使用 <NewImageTranslateMode tasks={tasks} />
 
-  const imageTasks = tasks.filter(t => ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'gif'].includes(t.ext))
-
-  const doOCRAndTranslate = useCallback(async () => {
-    if (!selectedTask) return
-    setTranslating(true); setError(null)
-    try {
-      // 1. OCR
-      const ocrRes = await fetch('/api/ocr/recognize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ taskId: selectedTask.id }),
-      })
-      if (!ocrRes.ok) throw new Error(`OCR ${ocrRes.status}`)
-      const ocrData = await ocrRes.json()
-      const text = ocrData.text || ''
-      setOcrText(text)
-
-      // 2. 翻译
-      const transRes = await fetch('/api/inspect/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ sourceLang: 'zh-CN', targetLang: 'en', taskId: 'standalone', text }),
-      })
-      if (!transRes.ok) throw new Error(`翻译 ${transRes.status}`)
-      const transData = await transRes.json()
-      setResult(transData.segments?.map((s: any) => s.target).join('\n') || '')
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setTranslating(false)
-    }
-  }, [selectedTask])
-
-  return (
-    <>
-      {/* 工具按钮条 */}
-      <div style={{
-        padding: '12px 24px',
-        borderBottom: '1px solid var(--xf-border-light)',
-        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-        background: 'var(--xf-bg-subtle)',
-      }}>
-        <button
-          className="xf-btn-solid"
-          onClick={doOCRAndTranslate}
-          disabled={!selectedTask || translating}
-          style={{ minWidth: 120 }}
-        >
-          {translating ? <><span className="xf-loading" /> 处理中…</> : <><ImageIcon size={14} /> OCR + 翻译</>}
-        </button>
-
-        <button
-          className="xf-mini-btn"
-          onClick={() => navigator.clipboard.writeText(result)}
-          disabled={!result}
-        >
-          <CopyIcon size={12} /> 复制译文
-        </button>
-      </div>
-
-      {error && (
-        <div style={{
-          padding: '8px 24px', background: 'var(--xf-danger-bg)',
-          borderBottom: '1px solid var(--xf-danger-border)',
-          color: 'var(--xf-danger)', fontSize: 13,
-        }}>
-          处理失败：{error}
-        </div>
-      )}
-
-      {/* 图片选择 + 结果 */}
-      <div className="xf-editor-layout">
-        <div className="xf-editor-main">
-          <div style={{ padding: 16, overflow: 'auto', height: '100%' }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--xf-text)' }}>
-              选择图片（png/jpg/jpeg/bmp/webp/gif）
-            </div>
-            {imageTasks.length === 0 ? (
-              <div className="xf-empty">暂无图片，请先上传</div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12 }}>
-                {imageTasks.map(t => (
-                  <div
-                    key={t.id}
-                    className={`xf-file-card${selectedTask?.id === t.id ? ' selected' : ''}`}
-                    onClick={() => setSelectedTask(t)}
-                    style={{ aspectRatio: '1', display: 'flex', flexDirection: 'column' }}
-                  >
-                    <img src={t.originalUrl} alt={t.name} style={{ width: '100%', height: 80, objectFit: 'cover', borderRadius: 4 }} />
-                    <div className="xf-file-card-name" style={{ marginTop: 4 }}>{t.name.slice(0, 12)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="xf-error-list">
-          <div style={{ padding: 12, borderBottom: '1px solid var(--xf-border-light)', fontWeight: 600, fontSize: 13 }}>
-            OCR 识别文本
-          </div>
-          <div style={{ padding: 12, fontSize: 13, lineHeight: 1.7, color: 'var(--xf-text-secondary)', borderBottom: '1px solid var(--xf-border-light)', minHeight: 80 }}>
-            {ocrText || '(OCR 识别后显示)'}
-          </div>
-          <div style={{ padding: 12, borderBottom: '1px solid var(--xf-border-light)', fontWeight: 600, fontSize: 13 }}>
-            翻译结果
-          </div>
-          <div style={{ flex: 1, padding: 12, fontSize: 13, lineHeight: 1.7, color: 'var(--xf-primary)', overflow: 'auto' }}>
-            {result || '(翻译后显示)'}
-          </div>
-        </div>
-      </div>
-    </>
-  )
-}
 
 /* ============ 音频翻译模式 ============ */
 function AudioTranslateMode({ tasks }: { tasks: Task[] }) {

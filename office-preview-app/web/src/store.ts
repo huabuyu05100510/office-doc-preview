@@ -82,6 +82,9 @@ interface State {
   bookmarks: Set<string>
   toggleBookmark: (taskId: string) => void
   isBookmarked: (taskId: string) => boolean
+  // ============ 图片翻译最近 (最近 20 个 image taskId) ============
+  imageTranslateRecent: string[]
+  addImageTranslateRecent: (taskId: string) => void
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -107,6 +110,8 @@ export const useStore = create<State>((set, get) => ({
   translateRenderMode: 'images',
   // 收藏夹：从 localStorage 恢复
   bookmarks: loadBookmarks(),
+  // 图片翻译最近：初始为空
+  imageTranslateRecent: [],
 
   async fetchTasks() {
     set({ loading: true })
@@ -272,5 +277,14 @@ export const useStore = create<State>((set, get) => ({
   // 收藏夹：是否已收藏
   isBookmarked(taskId) {
     return get().bookmarks.has(taskId)
+  },
+
+  // 图片翻译最近：插入并去重，保留最近 20 个
+  addImageTranslateRecent(taskId) {
+    if (!taskId) return
+    const cur = get().imageTranslateRecent
+    const next = [taskId, ...cur.filter(t => t !== taskId)].slice(0, 20)
+    console.info('[store] addImageTranslateRecent:', taskId, '-> size=', next.length)
+    set({ imageTranslateRecent: next })
   },
 }))

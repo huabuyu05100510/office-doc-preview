@@ -56,13 +56,11 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   const navigate = useNavigate()
   const select = useStore(s => s.select)
   const handleSelectTask = (taskId: string) => {
-    if (onSelectTask) {
-      onSelectTask(taskId)
-      return
-    }
     const ts = new Date().toISOString()
     console.info(`[rightpanel ${ts}] selectTask:`, taskId)
-    // 设置 store 中 active task 并跳转 /files?task=<id>
+    // 通知父组件（用于 store 同步等）
+    onSelectTask?.(taskId)
+    // 自行 navigate — 之前因 onSelectTask 是 no-op 函数而阻断
     const t = useStore.getState().tasks.find(x => x.id === taskId)
     if (t) select(t)
     navigate(`/files?task=${encodeURIComponent(taskId)}`)

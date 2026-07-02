@@ -30,4 +30,15 @@
   --color-warning-bg: rgba(250, 173, 20, 0.15);
   --color-danger-bg: rgba(255, 77, 79, 0.15);
   --color-info-bg: var(--color-primary-bg);
+  /* ============ Translation UX Overhaul (Phase A.1 Agent 1) ============ */
+  --color-translate-stage-active: var(--blue-5);
+  --color-translate-stage-done: var(--green-5);
+  --color-translate-stage-pending: var(--slate-8);
+  --color-annotation-kind-align: var(--blue-5);
+  --color-annotation-kind-seg: var(--green-5);
+  --color-annotation-kind-alt: var(--purple-5);
+  --color-toast-success: var(--green-5);
+  --color-toast-error: var(--red-5);
+  --color-toast-info: var(--blue-5);
+  --color-toast-warning: var(--amber-5);
 }
